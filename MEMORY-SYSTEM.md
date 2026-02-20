@@ -1,6 +1,8 @@
-# Canvas Memory: How a Self-Learning Personal Knowledge Graph Creates Procedural Memory
+# Engram: Agentic Memory Augmentation Through Self-Learning Knowledge Graphs
 
 > **This document explains the system architecture.** For operational instructions, see `AGENTS.md` which loads at every session start.
+
+**Engram** = memory trace stored in the brain. This system creates external memory traces with agentic capture, retrieval, and compute offload.
 
 ---
 
@@ -18,7 +20,7 @@ AI tools today offer two approaches to personalization:
 
 ## The Architecture
 
-Canvas Memory is a personal knowledge graph built on a simple architectural insight: **instead of storing preferences in a database, teach the system how to modify its own behavioral governance.**
+Engram is a personal knowledge graph built on a simple architectural insight: **instead of storing preferences in a database, teach the system how to modify its own behavioral governance.**
 
 The system uses flat files and grep-based search, organized into a three-tier architecture that keeps retrieval fast while supporting unlimited detail storage.
 
@@ -215,7 +217,7 @@ Each capture makes the system permanently smarter. Not through accumulated conve
 
 Most AI "memory" systems remember facts: your name, your preferences, your past conversations. That's declarative memory -- knowing WHAT.
 
-Canvas Memory creates **procedural memory** -- knowing HOW. The system doesn't just remember that you prefer hot/cold tiered architecture. It has a decision procedure for evaluating any new information: does this exceed 500 words? Route to cold with hot reference. Under 500? Hot memory direct. And it knows this because you taught it through corrections that were encoded into persistent protocols.
+Engram creates **procedural memory** -- knowing HOW. The system doesn't just remember that you prefer hot/cold tiered architecture. It has a decision procedure for evaluating any new information: does this exceed 500 words? Route to cold with hot reference. Under 500? Hot memory direct. And it knows this because you taught it through corrections that were encoded into persistent protocols.
 
 The distinction matters because procedural memory produces **behavioral change**. A system with declarative memory might remember "user prefers organized memory." A system with procedural memory evaluates each piece of information individually and makes the right routing decision based on the specific characteristics -- even for information types it has never seen before, because the decision procedure generalizes.
 
@@ -255,7 +257,7 @@ The bootstrap file and meta-instruction together are fewer than 200 lines. Every
 
 ## The `.canvas/` Convention
 
-Canvas Memory uses a specific directory convention:
+Engram uses a specific directory convention:
 
 **User Private:** `~/.canvas/memory/`
 - Your private knowledge graph

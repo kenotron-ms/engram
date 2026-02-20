@@ -1,8 +1,8 @@
-# Agent Instructions: Canvas Memory System
+# Agent Instructions: Engram
 
-> **Version:** 3.0 | **Updated:** 2026-02-18 | **Primary Reader:** AI agents
+> **Version:** 4.0 | **Updated:** 2026-02-20 | **Primary Reader:** AI agents
 
-This file tells any AI agent how to operate with this personal knowledge graph memory system.
+This file tells any AI agent how to operate with Engram - agentic memory augmentation with automatic capture, intelligent retrieval, and cognitive compute offload.
 
 **Violating the letter of the rules is violating the spirit of the rules.**
 
@@ -464,7 +464,7 @@ You have everything needed:
 
 ---
 
-**Memory system specification:** @MEMORY-SYSTEM.md (reference for terminology and deep dives)
+**Engram specification:** @MEMORY-SYSTEM.md (reference for terminology and deep dives)
 
 **Protocols:** @_protocols/
 
@@ -477,3 +477,4 @@ You have everything needed:
 | 1.0 | 2026-02-17 | Initial version |
 | 2.0 | 2026-02-17 | Added CRITICAL Agent Behavior Protocol |
 | 3.0 | 2026-02-18 | Complete rewrite: Life OS architecture + our unique features (hot/cold, .canvas/, keywords, YAML-aware search) |
+| 4.0 | 2026-02-20 | Renamed to Engram - emphasizing cognitive augmentation over "memory" |
