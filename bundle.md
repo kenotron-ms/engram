@@ -14,6 +14,7 @@ session:
 
 hooks:
   - module: hooks-protocol-reminder
+    source: ./modules/hooks-protocol-reminder
     config:
       priority: 5
       inject_role: system
@@ -21,6 +22,7 @@ hooks:
       user_memory_base: "~/.canvas/memory"
 
   - module: hooks-memory-tracker
+    source: ./modules/hooks-memory-tracker
     config:
       priority: 90
       project_memory_base: ".canvas/memory"
@@ -33,14 +35,14 @@ tools:
     source: git+https://github.com/microsoft/amplifier-module-tool-filesystem@main
 
 includes:
-  - path: ../../AGENTS.md
-  - path: ../../MEMORY-SYSTEM.md
-  - path: ../../_protocols/inline-capture.md
-  - path: ../../_protocols/knowledge-extraction.md
-  - path: ../../_protocols/dual-write-decision.md
-  - path: ../../_protocols/scope-routing.md
-  - path: ../../_protocols/cross-reference-cascade.md
-  - path: ../../_protocols/source-intake.md
+  - path: ./AGENTS.md
+  - path: ./MEMORY-SYSTEM.md
+  - path: ./_protocols/inline-capture.md
+  - path: ./_protocols/knowledge-extraction.md
+  - path: ./_protocols/dual-write-decision.md
+  - path: ./_protocols/scope-routing.md
+  - path: ./_protocols/cross-reference-cascade.md
+  - path: ./_protocols/source-intake.md
 ---
 
 # Engram Bundle
@@ -65,8 +67,8 @@ Test this bundle standalone without affecting the current session:
 
 ```bash
 # Run a test prompt with this bundle
-amplifier run --bundle .amplifier/bundles/engram.md "Tell me about engram"
+amplifier run --bundle ./bundle.md "Tell me about engram"
 
 # Interactive session with this bundle
-amplifier --bundle .amplifier/bundles/engram.md
+amplifier --bundle ./bundle.md
 ```

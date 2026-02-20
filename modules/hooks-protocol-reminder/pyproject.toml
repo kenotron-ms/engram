@@ -1,0 +1,15 @@
+[project]
+name = "amplifier-module-hooks-protocol-reminder"
+version = "0.1.0"
+description = "Memory protocol reminder hook for Canvas Memory system"
+requires-python = ">=3.11"
+dependencies = [
+    "amplifier-core>=0.8.0",
+]
+
+[project.entry-points."amplifier.modules"]
+hooks-protocol-reminder = "amplifier_module_hooks_protocol_reminder:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
