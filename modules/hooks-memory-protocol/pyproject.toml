@@ -1,0 +1,15 @@
+[project]
+name = "amplifier-module-hooks-memory-protocol"
+version = "0.1.0"
+description = "Enforces RETRIEVE → RESPOND → CAPTURE memory protocols"
+requires-python = ">=3.11"
+dependencies = [
+    "amplifier-core>=0.11.0",
+]
+
+[project.entry-points."amplifier.modules"]
+hooks-memory-protocol = "amplifier_module_hooks_memory_protocol:mount"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

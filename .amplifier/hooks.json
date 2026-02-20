@@ -1,0 +1,28 @@
+{
+  "hooks": [
+    {
+      "module": "hooks-memory-protocol",
+      "source": "git+file:///Users/ken/workspace/memory-system#subdirectory=modules/hooks-memory-protocol",
+      "config": {
+        "inject_pre_request": true,
+        "inject_validation": true,
+        "priority": 5,
+        "capture_triggers": [
+          "i prefer",
+          "remember that",
+          "my style",
+          "don't have access",
+          "can't use",
+          "constraint",
+          "requirement",
+          "we decided",
+          "let's use",
+          "chosen approach",
+          "going forward",
+          "always do",
+          "never do"
+        ]
+      }
+    }
+  ]
+}
