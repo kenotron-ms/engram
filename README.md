@@ -8,12 +8,18 @@ A personal knowledge graph system that works in both **Amplifier** and **Claude 
 
 ### In Amplifier
 
-```bash
-# Use the engram bundle
-amplifier --bundle engram
+Add Engram to your bundle's `includes:` section:
 
-# Or run a single prompt
-amplifier run --bundle engram "your prompt here"
+```yaml
+# In your bundle.md
+includes:
+  - bundle: git+https://github.com/kenotron-ms/engram@main
+```
+
+Then use your bundle as normal:
+
+```bash
+amplifier --bundle your-bundle
 ```
 
 ### In Claude Code
@@ -57,18 +63,15 @@ Every interaction follows **RETRIEVE → RESPOND → CAPTURE**:
 
 ```
 .
+├── bundle.md                     # Root bundle (for distribution)
 ├── AGENTS.md                     # Bootstrap file (loaded every session)
 ├── MEMORY-SYSTEM.md              # Complete architecture
 ├── MEMORY_CONFIG.md              # Path configuration
 ├── CROSS_PLATFORM.md             # Amplifier vs Claude Code
 │
-├── .amplifier/                   # Amplifier configuration
-│   ├── bundles/
-│   │   ├── engram.md             # Default config
-│   │   └── engram-custom-paths.md  # Custom path example
-│   └── modules/
-│       ├── hooks-protocol-reminder/  # Protocol injection hook (Python)
-│       └── hooks-memory-tracker/     # Capture validation hook (Python)
+├── modules/                      # Local hook modules
+│   ├── hooks-protocol-reminder/  # Protocol injection hook (Python)
+│   └── hooks-memory-tracker/     # Capture validation hook (Python)
 │
 ├── .claude/                      # Claude Code configuration
 │   ├── settings.json             # Built-in hooks config (AUTOMATIC)
@@ -114,12 +117,12 @@ Same memory files work in both Amplifier and Claude Code:
 Both platforms support custom base directories:
 
 ```yaml
-# Amplifier (.amplifier/bundles/engram.md)
-hooks:
-  - module: hooks-protocol-reminder
-    config:
-      project_memory_base: ".memory"
-      user_memory_base: "~/.my-memory"
+# In your bundle that includes Engram
+includes:
+  - bundle: git+https://github.com/kenotron-ms/engram@main
+
+# Then configure if needed (optional - defaults work)
+# The hooks from Engram will use .canvas/memory by default
 ```
 
 ```markdown
@@ -181,7 +184,8 @@ python scripts/canvas-memory-search.py \
 ### Test Amplifier
 
 ```bash
-amplifier run --bundle engram \
+# Test the bundle directly
+amplifier run --bundle git+https://github.com/kenotron-ms/engram@main \
   "Test: Save this: Ken likes portable systems"
 ```
 
