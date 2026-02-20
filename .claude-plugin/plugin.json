@@ -1,0 +1,49 @@
+{
+  "name": "engram",
+  "description": "Engram - Agentic memory augmentation for Claude Code. Automatic capture, intelligent retrieval, and cognitive compute offload with dual-memory architecture.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Engram"
+  },
+  "homepage": "https://github.com/kenotron-ms/engram",
+  "repository": "https://github.com/kenotron-ms/engram",
+  "license": "MIT",
+  "keywords": ["memory", "knowledge", "persistence", "context", "recall", "canvas"],
+  "commands": ["./.claude/commands/"],
+  "agents": ["./.claude/agents/"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.canvas/scripts/protocol-reminder.sh",
+            "statusMessage": "Loading memory protocol..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.canvas/scripts/memory-search.sh",
+            "statusMessage": "Searching memory..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.canvas/scripts/validate-capture.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

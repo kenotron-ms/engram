@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/protocol-reminder.sh",
+            "statusMessage": "Loading memory protocol..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/memory-search.sh",
+            "statusMessage": "Searching memory..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/validate-capture.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "MEMORY_PROJECT_BASE": ".canvas/memory",
+    "MEMORY_USER_BASE": "~/.canvas/memory"
+  },
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  }
+}

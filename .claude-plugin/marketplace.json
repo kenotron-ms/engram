@@ -1,0 +1,28 @@
+{
+  "name": "engram",
+  "owner": {
+    "name": "Engram"
+  },
+  "metadata": {
+    "description": "Engram - Agentic memory augmentation for Claude Code with automatic capture and intelligent retrieval.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "engram",
+      "source": {
+        "source": "github",
+        "repo": "kenotron-ms/engram"
+      },
+      "description": "Gives Claude persistent memory across sessions. Stores personal knowledge privately (~/.canvas/memory) and project knowledge in-repo (.canvas/memory). Auto-captures preferences, decisions, and patterns using the RETRIEVE → RESPOND → CAPTURE protocol.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Engram"
+      },
+      "homepage": "https://github.com/kenotron-ms/engram",
+      "license": "MIT",
+      "keywords": ["memory", "knowledge", "persistence", "context", "recall"],
+      "category": "productivity"
+    }
+  ]
+}
