@@ -1,0 +1,27 @@
+{
+  "description": "Memory system protocol enforcement",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${AMPLIFIER_HOOKS_DIR}/protocol_reminder.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${AMPLIFIER_HOOKS_DIR}/memory_tracker.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
