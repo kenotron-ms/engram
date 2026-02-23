@@ -12,7 +12,7 @@ This file tells any AI agent how to operate with Engram - agentic memory augment
 
 This is a **bootstrap + on-demand protocol** architecture. This file (AGENTS.md) is the bootstrap -- it loads every session and teaches you how to route content and find detailed protocols.
 
-**Detailed processing protocols live in `_protocols/`.** Each protocol file is self-contained with steps, completion checklists, and quality safeguards. You load them on demand when you need them.
+**Detailed processing protocols live in `context/protocols/`.** Each protocol file is self-contained with steps, completion checklists, and quality safeguards. You load them on demand when you need them.
 
 ```
 EVERY user message follows this mandatory pattern:
@@ -33,7 +33,7 @@ SILENT     visible    SILENT
 2. If YES: Capture immediately (hot or cold storage, appropriate domain)
 3. Silent operation - don't announce captures
 
-See `_protocols/inline-capture.md` for complete RETRIEVE → RESPOND → CAPTURE details.
+See `context/protocols/inline-capture.md` for complete RETRIEVE → RESPOND → CAPTURE details.
 
 ---
 
@@ -43,11 +43,11 @@ See `_protocols/inline-capture.md` for complete RETRIEVE → RESPOND → CAPTURE
 
 | You learned... | Protocol | Hot Storage | Cold Storage |
 |----------------|----------|-------------|--------------|
-| User preference or constraint | `_protocols/inline-capture.md` | `~/.canvas/memory/information/{domain}/` | `~/.canvas/memory/archive/{domain}/` |
-| New domain knowledge | `_protocols/knowledge-extraction.md` | `~/.canvas/memory/information/{domain}/` | `~/.canvas/memory/archive/{domain}/` |
-| Decision or pattern (2nd+ occurrence) | `_protocols/inline-capture.md` | `~/.canvas/memory/information/{domain}/` | N/A |
-| Important context about project | `_protocols/dual-write-decision.md` | Both user + project if shareable | N/A |
-| Cross-reference opportunity | `_protocols/cross-reference-cascade.md` | Update existing items | N/A |
+| User preference or constraint | `context/protocols/inline-capture.md` | `~/.canvas/memory/information/{domain}/` | `~/.canvas/memory/archive/{domain}/` |
+| New domain knowledge | `context/protocols/knowledge-extraction.md` | `~/.canvas/memory/information/{domain}/` | `~/.canvas/memory/archive/{domain}/` |
+| Decision or pattern (2nd+ occurrence) | `context/protocols/inline-capture.md` | `~/.canvas/memory/information/{domain}/` | N/A |
+| Important context about project | `context/protocols/dual-write-decision.md` | Both user + project if shareable | N/A |
+| Cross-reference opportunity | `context/protocols/cross-reference-cascade.md` | Update existing items | N/A |
 
 **Storage routing:**
 
@@ -67,7 +67,7 @@ First: **What domain is this conversation in?**
 | `professional/architecture/` | System design, patterns |
 | `personal/preferences/` | How user likes to work |
 
-See `_protocols/scope-routing.md` for domain inference strategy.
+See `context/protocols/scope-routing.md` for domain inference strategy.
 
 **Dual-write decision:**
 
@@ -76,21 +76,21 @@ See `_protocols/scope-routing.md` for domain inference strategy.
 | Is this personal observation/preference? | Write ONLY to `~/.canvas/memory/` |
 | Is this helpful to project AND safe to share publicly? | Write to BOTH user + project |
 
-See `_protocols/dual-write-decision.md` for complete decision tree.
+See `context/protocols/dual-write-decision.md` for complete decision tree.
 
 ---
 
 # Memory Protocols
 
-Each protocol is a self-contained file in `_protocols/`. **Read the protocol file before processing any content.**
+Each protocol is a self-contained file in `context/protocols/`. **Read the protocol file before processing any content.**
 
 | Protocol | File | Use when |
 |----------|------|----------|
-| Inline Capture | `_protocols/inline-capture.md` | The RETRIEVE → RESPOND → CAPTURE loop (always) |
-| Knowledge Extraction | `_protocols/knowledge-extraction.md` | Capturing new domain knowledge |
-| Dual-Write Decision | `_protocols/dual-write-decision.md` | Deciding user-only vs user+project |
-| Scope Routing | `_protocols/scope-routing.md` | Domain inference and search strategy |
-| Cross-Reference Cascade | `_protocols/cross-reference-cascade.md` | Finding secondary effects (always after capture) |
+| Inline Capture | `context/protocols/inline-capture.md` | The RETRIEVE → RESPOND → CAPTURE loop (always) |
+| Knowledge Extraction | `context/protocols/knowledge-extraction.md` | Capturing new domain knowledge |
+| Dual-Write Decision | `context/protocols/dual-write-decision.md` | Deciding user-only vs user+project |
+| Scope Routing | `context/protocols/scope-routing.md` | Domain inference and search strategy |
+| Cross-Reference Cascade | `context/protocols/cross-reference-cascade.md` | Finding secondary effects (always after capture) |
 
 ---
 
@@ -146,7 +146,7 @@ Memory system uses hot/cold tiers to keep search fast.
 
 **The folder structure IS the optimization.**
 
-See `_protocols/scope-routing.md` for inference strategy.
+See `context/protocols/scope-routing.md` for inference strategy.
 
 ## 4. Keywords Simulate Embeddings
 
@@ -197,7 +197,7 @@ Before marking any processing complete:
 
 When you make a mistake or learn something new:
 1. Fix the immediate issue
-2. Update AGENTS.md or relevant `_protocols/` file so it doesn't happen again
+2. Update AGENTS.md or relevant `context/protocols/` file so it doesn't happen again
 3. Learnings that stay in conversation only = lost learnings
 
 ## 9. Read Before Asking
@@ -220,7 +220,7 @@ After capturing any knowledge, scan for secondary effects:
 | **Patterns** | Is this the 2nd+ occurrence of something? |
 | **Temporal** | Does this make older knowledge stale? |
 
-See `_protocols/cross-reference-cascade.md` for complete cascade process.
+See `context/protocols/cross-reference-cascade.md` for complete cascade process.
 
 ## 11. Temporal Awareness
 
@@ -241,7 +241,7 @@ Project memory (`./.canvas/memory/`) is **safe to share publicly**. Test: "Could
 - Personal observations → user memory ONLY
 - Project-helpful + public-safe → BOTH
 
-See `_protocols/dual-write-decision.md` for decision tree.
+See `context/protocols/dual-write-decision.md` for decision tree.
 
 ---
 
@@ -458,15 +458,15 @@ You have everything needed:
 
 1. Identify the learning (what went wrong? what's new?)
 2. Abstract it (don't just fix the specific case)
-3. Find right location: principles/routing → AGENTS.md, processing details → `_protocols/`
+3. Find right location: principles/routing → AGENTS.md, processing details → `context/protocols/`
 4. Verify consistency with other sections
 5. **Update version number and date**
 
 ---
 
-**Engram specification:** @MEMORY-SYSTEM.md (reference for terminology and deep dives)
+**Engram specification:** @context/memory-system.md (reference for terminology and deep dives)
 
-**Protocols:** @_protocols/
+**Protocols:** @context/protocols/
 
 ---
 

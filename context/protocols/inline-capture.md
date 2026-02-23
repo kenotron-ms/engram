@@ -175,7 +175,7 @@ visibility: private
 
 ### After Capture: Cross-Reference Cascade
 
-**REQUIRED:** After capturing, check for secondary effects. See `_protocols/cross-reference-cascade.md`.
+**REQUIRED:** After capturing, check for secondary effects. See `context/protocols/cross-reference-cascade.md`.
 
 ---
 

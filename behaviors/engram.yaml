@@ -22,10 +22,10 @@ hooks:
 context:
   include:
     - engram:AGENTS.md
-    - engram:MEMORY-SYSTEM.md
-    - engram:_protocols/inline-capture.md
-    - engram:_protocols/knowledge-extraction.md
-    - engram:_protocols/dual-write-decision.md
-    - engram:_protocols/scope-routing.md
-    - engram:_protocols/cross-reference-cascade.md
-    - engram:_protocols/source-intake.md
+    - engram:context/memory-system.md
+    - engram:context/protocols/inline-capture.md
+    - engram:context/protocols/knowledge-extraction.md
+    - engram:context/protocols/dual-write-decision.md
+    - engram:context/protocols/scope-routing.md
+    - engram:context/protocols/cross-reference-cascade.md
+    - engram:context/protocols/source-intake.md

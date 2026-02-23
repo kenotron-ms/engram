@@ -98,7 +98,7 @@ Purpose: Project-specific knowledge safe to share publicly
 
 ### Protocol Files
 
-Each content type or operational pattern has a dedicated protocol file. These are self-contained decision procedures stored as markdown files in a `_protocols/` directory. Each protocol includes:
+Each content type or operational pattern has a dedicated protocol file. These are self-contained decision procedures stored as markdown files in a `context/protocols/` directory. Each protocol includes:
 
 - **Steps**: What to do, in order, for this pattern
 - **A gate function**: A quality checklist the AI must pass before marking work complete. "Did you infer the domain? Did you extract keywords? Did you check for cross-references?" If any check fails, the work isn't done.
@@ -337,4 +337,4 @@ When applying old knowledge, the system checks expiration and verifies if needed
 
 **For operational instructions, see:** `AGENTS.md` (loads every session)
 
-**For detailed protocols, see:** `_protocols/` (loaded on demand)
+**For detailed protocols, see:** `context/protocols/` (loaded on demand)
