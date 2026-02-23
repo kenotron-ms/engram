@@ -8,7 +8,15 @@ A personal knowledge graph system that works in both **Amplifier** and **Claude 
 
 ### In Amplifier
 
-Add Engram to your bundle's `includes:` section:
+**Option 1 — Include just the behavior** (recommended when you have your own bundle):
+
+```yaml
+# In your bundle.md
+includes:
+  - bundle: git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml
+```
+
+**Option 2 — Include the full Engram bundle** (standalone, brings its own foundation):
 
 ```yaml
 # In your bundle.md
@@ -63,40 +71,38 @@ Every interaction follows **RETRIEVE → RESPOND → CAPTURE**:
 
 ```
 .
-├── bundle.md                     # Root bundle (for distribution)
+├── bundle.md                     # Root bundle (standalone, includes foundation + behavior)
 ├── AGENTS.md                     # Bootstrap file (loaded every session)
-├── MEMORY-SYSTEM.md              # Complete architecture
 ├── MEMORY_CONFIG.md              # Path configuration
 ├── CROSS_PLATFORM.md             # Amplifier vs Claude Code
 │
-├── modules/                      # Local hook modules
-│   ├── hooks-protocol-reminder/  # Protocol injection hook (Python)
-│   └── hooks-memory-tracker/     # Capture validation hook (Python)
+├── behaviors/
+│   └── engram.yaml               # Behavior bundle (hooks + context — include this)
+│
+├── context/                      # Context files loaded by the behavior
+│   ├── memory-system.md          # Complete architecture
+│   └── protocols/                # Detailed processing protocols
+│       ├── inline-capture.md
+│       ├── dual-write-decision.md
+│       ├── scope-routing.md
+│       ├── cross-reference-cascade.md
+│       ├── knowledge-extraction.md
+│       └── source-intake.md
+│
+├── modules/                      # Hook modules (Python)
+│   ├── hooks-protocol-reminder/  # Protocol injection hook
+│   └── hooks-memory-tracker/     # Capture validation hook
 │
 ├── .claude/                      # Claude Code configuration
 │   ├── settings.json             # Built-in hooks config (AUTOMATIC)
 │   ├── CLAUDE.md                 # Auto-loaded instructions
-│   ├── HOOKS_GUIDE.md            # Built-in hooks documentation
 │   ├── scripts/                  # Hook implementations
 │   │   ├── protocol-reminder.sh  # SessionStart hook
 │   │   ├── memory-search.sh      # UserPromptSubmit hook
 │   │   └── validate-capture.sh   # Stop hook
 │   ├── rules/                    # Auto-loaded protocol rules
-│   │   ├── memory-protocol.md
-│   │   ├── dual-write.md
-│   │   └── search-strategy.md
 │   ├── agents/                   # Optional subagents
-│   │   ├── protocol-enforcer.md
-│   │   └── memory-keeper.md
 │   └── commands/                 # Custom shortcuts
-│       ├── memory-search.md
-│       └── memory-capture.md
-│
-├── _protocols/                   # Detailed processing protocols
-│   ├── inline-capture.md
-│   ├── dual-write-decision.md
-│   ├── scope-routing.md
-│   └── cross-reference-cascade.md
 │
 ├── scripts/
 │   └── canvas-memory-search.py   # YAML-aware search tool
@@ -117,12 +123,19 @@ Same memory files work in both Amplifier and Claude Code:
 Both platforms support custom base directories:
 
 ```yaml
-# In your bundle that includes Engram
+# Include the behavior, then override hook config via deep-merge
 includes:
-  - bundle: git+https://github.com/kenotron-ms/engram@main
+  - bundle: git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml
 
-# Then configure if needed (optional - defaults work)
-# The hooks from Engram will use .canvas/memory by default
+hooks:
+  - module: hooks-protocol-reminder
+    config:
+      project_memory_base: ".my-project/memory"   # default: .canvas/memory
+      user_memory_base: "~/.my-user/memory"        # default: ~/.canvas/memory
+  - module: hooks-memory-tracker
+    config:
+      project_memory_base: ".my-project/memory"
+      user_memory_base: "~/.my-user/memory"
 ```
 
 ```markdown
@@ -147,11 +160,11 @@ Memory Locations:
 | File | Purpose |
 |------|---------|
 | `AGENTS.md` | Bootstrap instructions for AI agents |
-| `MEMORY-SYSTEM.md` | Complete system architecture |
+| `context/memory-system.md` | Complete system architecture |
 | `MEMORY_CONFIG.md` | Custom path configuration |
 | `CROSS_PLATFORM.md` | Amplifier vs Claude Code comparison |
 | `.claude/HOOKS_GUIDE.md` | Claude Code subagent hooks |
-| `_protocols/*.md` | Detailed processing protocols |
+| `context/protocols/*.md` | Detailed processing protocols |
 
 ## Examples
 
