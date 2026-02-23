@@ -1,0 +1,31 @@
+bundle:
+  name: engram-behavior
+  version: 1.0.0
+  description: Engram memory augmentation - RETRIEVE→RESPOND→CAPTURE protocol with automatic memory tracking
+
+hooks:
+  - module: hooks-protocol-reminder
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/hooks-protocol-reminder
+    config:
+      priority: 5
+      inject_role: system
+      project_memory_base: ".canvas/memory"
+      user_memory_base: "~/.canvas/memory"
+
+  - module: hooks-memory-tracker
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/hooks-memory-tracker
+    config:
+      priority: 90
+      project_memory_base: ".canvas/memory"
+      user_memory_base: "~/.canvas/memory"
+
+context:
+  include:
+    - engram:AGENTS.md
+    - engram:MEMORY-SYSTEM.md
+    - engram:_protocols/inline-capture.md
+    - engram:_protocols/knowledge-extraction.md
+    - engram:_protocols/dual-write-decision.md
+    - engram:_protocols/scope-routing.md
+    - engram:_protocols/cross-reference-cascade.md
+    - engram:_protocols/source-intake.md
