@@ -82,6 +82,9 @@ Details: `@engram:context/protocols/dual-write-decision.md`
 
 ## Manual Search (if auto-retrieval missed something)
 
+**Manual search:** Use the `memory_search` tool with a specific query rather than falling back to `grep`. The tool is YAML-frontmatter-aware and handles domain scoping.
+
+If the tool is unavailable for any reason:
 ```bash
 grep -r "term" ~/.canvas/memory/information/{domain}/
 ```

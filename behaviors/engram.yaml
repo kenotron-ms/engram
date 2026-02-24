@@ -3,6 +3,13 @@ bundle:
   version: 1.0.0
   description: Engram memory augmentation - RETRIEVE→RESPOND→CAPTURE protocol with automatic memory tracking
 
+tools:
+  - module: tool-memory-search
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/tool-memory-search
+    config:
+      project_memory_base: ".canvas/memory"
+      user_memory_base: "~/.canvas/memory"
+
 hooks:
   - module: hooks-protocol-reminder
     source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/hooks-protocol-reminder
