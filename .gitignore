@@ -37,5 +37,8 @@ env/
 .DS_Store
 Thumbs.db
 
+# Git worktrees
+.worktrees/
+
 # User memory (private)
 # Note: Project memory (.canvas/memory/) IS committed
