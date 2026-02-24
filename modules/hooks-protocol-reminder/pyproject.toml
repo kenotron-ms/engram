@@ -29,7 +29,6 @@ allow-direct-references = true
 [dependency-groups]
 dev = [
     "amplifier-core @ git+https://github.com/microsoft/amplifier-core@main",
-    "amplifier-module-tool-memory-search",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
 ]

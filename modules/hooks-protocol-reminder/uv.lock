@@ -25,7 +25,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "amplifier-core" },
-    { name = "amplifier-module-tool-memory-search" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -36,7 +35,6 @@ requires-dist = [{ name = "amplifier-module-tool-memory-search", directory = "..
 [package.metadata.requires-dev]
 dev = [
     { name = "amplifier-core", git = "https://github.com/microsoft/amplifier-core?rev=main" },
-    { name = "amplifier-module-tool-memory-search", directory = "../tool-memory-search" },
     { name = "pytest", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
 ]
