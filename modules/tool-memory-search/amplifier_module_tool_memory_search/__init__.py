@@ -20,7 +20,7 @@ class MemorySearchTool:
             "required": ["query"],
         }
 
-    async def execute(self, input: dict[str, Any]) -> Any:
+    async def execute(self, tool_input: dict[str, Any]) -> Any:
         raise NotImplementedError
 
 
