@@ -7,11 +7,11 @@ Agentic memory augmentation. **Violating the letter of the rules is violating th
 ## Mandatory Loop (Every Message)
 
 ```
-RETRIEVE → RESPOND → CAPTURE
-(silent)    (visible)  (silent)
+RETRIEVE    → RESPOND → CAPTURE
+(automatic)   (visible)  (silent)
 ```
 
-**Before responding:** Infer domain → extract keywords → search → load 2-3 relevant files → apply.
+**Before responding:** Relevant memory is injected automatically — apply any `<retrieved-memory>` in your context.
 **After responding:** Did I learn something NEW? If yes → capture immediately, silently.
 
 Details: `@engram:context/protocols/inline-capture.md`
@@ -80,15 +80,10 @@ Details: `@engram:context/protocols/dual-write-decision.md`
 
 ---
 
-## Search
+## Manual Search (if auto-retrieval missed something)
 
 ```bash
-# Primary (YAML-aware, handles multi-line arrays)
-python scripts/canvas-memory-search.py --keyword "term" --domain "projects/"
-python scripts/canvas-memory-search.py --keyword "tasks,work" --tag "epic"
-
-# Fallback (grep tool doesn't expand ~, get $HOME first via bash)
-grep pattern="term" path="$HOME/.canvas/memory/information/{domain}/"
+grep -r "term" ~/.canvas/memory/information/{domain}/
 ```
 
 **At project start:** `read_file ./.canvas/memory/context.md`

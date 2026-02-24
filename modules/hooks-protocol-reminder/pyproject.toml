@@ -10,6 +10,9 @@ dependencies = [
 [project.entry-points."amplifier.modules"]
 hooks-protocol-reminder = "amplifier_module_hooks_protocol_reminder:mount"
 
+[tool.pyright]
+reportMissingImports = false
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
