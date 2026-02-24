@@ -1,4 +1,4 @@
-"""Memory search utilities for hooks-protocol-reminder.
+"""Memory search utilities for tool-memory-search.
 
 Hybrid grep + YAML-frontmatter search, adapted from scripts/canvas-memory-search.py.
 """

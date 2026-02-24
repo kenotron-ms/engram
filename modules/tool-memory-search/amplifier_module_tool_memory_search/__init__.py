@@ -59,10 +59,17 @@ class MemorySearchTool:
             )
 
         memory_base = tool_input.get("memory_base", "both")
+        if memory_base not in ("project", "user", "both"):
+            return ToolResult(
+                success=False,
+                error={
+                    "message": f"memory_base must be 'project', 'user', or 'both'; got {memory_base!r}"
+                },
+            )
 
         try:
             keywords = extract_keywords(query)
-            results: list[dict] = []
+            results: list[dict[str, Any]] = []
 
             if memory_base in ("user", "both"):
                 user_path = Path(self._user_memory_base).expanduser()
