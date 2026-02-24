@@ -15,7 +15,7 @@ from typing import Any
 
 from amplifier_core import HookResult, ModuleCoordinator  # type: ignore[import-untyped]
 
-from ._search import extract_keywords, search_memory
+from amplifier_module_tool_memory_search._search import extract_keywords, search_memory
 
 logger = logging.getLogger(__name__)
 
