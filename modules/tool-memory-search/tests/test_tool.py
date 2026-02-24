@@ -21,29 +21,23 @@ def test_input_schema_requires_query(tool):
     assert "query" in schema["required"]
 
 
-@pytest.mark.xfail(
-    reason="memory_base field not yet added to schema — Task 2", strict=True
-)
 def test_input_schema_memory_base_enum(tool):
     schema = tool.input_schema
     assert "memory_base" in schema["properties"]
     assert schema["properties"]["memory_base"]["enum"] == ["project", "user", "both"]
 
 
-@pytest.mark.xfail(reason="execute() not yet implemented — Task 2", strict=True)
 async def test_execute_missing_query_returns_failure(tool):
     result = await tool.execute({})
     assert result.success is False
     assert "query" in result.error["message"].lower()
 
 
-@pytest.mark.xfail(reason="execute() not yet implemented — Task 2", strict=True)
 async def test_execute_empty_query_returns_failure(tool):
     result = await tool.execute({"query": "   "})
     assert result.success is False
 
 
-@pytest.mark.xfail(reason="execute() not yet implemented — Task 2", strict=True)
 async def test_execute_returns_tool_result(tool, tmp_path):
     # Give the tool a real (empty) memory dir so search completes without error
     tool._user_memory_base = str(tmp_path)
