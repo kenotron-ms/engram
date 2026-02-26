@@ -36,7 +36,7 @@ DEFAULT_TRIGGERS = [
 
 async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = None):
     """Mount the memory protocol enforcement hook.
-    
+
     Args:
         coordinator: Module coordinator
         config: Optional configuration
@@ -46,7 +46,7 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
             - memory_path_pattern: Path pattern that counts as capture (default: "/.canvas/memory/")
             - validation_turns: Turns to check for capture (default: 1)
             - priority: Hook priority (default: 5)
-    
+
     Returns:
         Optional cleanup function
     """
@@ -59,22 +59,22 @@ async def mount(coordinator: ModuleCoordinator, config: dict[str, Any] | None = 
 
 class MemoryProtocolHook:
     """Hook that enforces RETRIEVE → RESPOND → CAPTURE memory protocols.
-    
+
     Three-phase enforcement:
     1. Pre-request: Inject protocol reminder before each LLM call
     2. Input analysis: Detect when user provides new knowledge
     3. Post-execution: Validate capture occurred when needed
     """
-    
+
     def __init__(self, coordinator: ModuleCoordinator, config: dict[str, Any]):
         """Initialize memory protocol hook.
-        
+
         Args:
             coordinator: Module coordinator for state management
             config: Configuration dict
         """
         self.coordinator = coordinator
-        
+
         # Configuration
         self.inject_pre_request = config.get("inject_pre_request", True)
         self.inject_validation = config.get("inject_validation", True)
@@ -82,10 +82,10 @@ class MemoryProtocolHook:
         self.memory_path_pattern = config.get("memory_path_pattern", "/.canvas/memory/")
         self.validation_turns = config.get("validation_turns", 1)
         self.priority = config.get("priority", 5)
-        
+
         # State (stored in coordinator for persistence)
         self._state_key_prefix = "hooks_memory_protocol"
-    
+
     def register(self, hooks):
         """Register hook handlers for lifecycle events."""
         if self.inject_pre_request:
@@ -93,31 +93,31 @@ class MemoryProtocolHook:
                 "provider:request",
                 self.on_provider_request,
                 priority=self.priority,
-                name="hooks-memory-protocol-reminder"
+                name="hooks-memory-protocol-reminder",
             )
-        
+
         hooks.register(
             "prompt:submit",
             self.on_prompt_submit,
             priority=self.priority,
-            name="hooks-memory-protocol-detector"
+            name="hooks-memory-protocol-detector",
         )
-        
+
         if self.inject_validation:
             hooks.register(
                 "execution:end",
                 self.on_execution_end,
                 priority=self.priority,
-                name="hooks-memory-protocol-validator"
+                name="hooks-memory-protocol-validator",
             )
-    
+
     async def on_provider_request(self, event: str, data: dict[str, Any]) -> HookResult:
         """Inject protocol reminder before each LLM request.
-        
+
         Args:
             event: Event name (provider:request)
             data: Event data
-            
+
         Returns:
             HookResult with ephemeral context injection
         """
@@ -139,80 +139,88 @@ AFTER responding (CAPTURE):
      - Keywords: natural variations MANDATORY
      - Inductive writing: conclusion first
      - Silent: don't announce
-  3. If NO: Done
+  3. If new FILE created: update ~/.canvas/memory/_index.md
+     - Add entry under the correct domain section
+     - Format: | filename.md | 1-sentence description |
+     - Create the section if it doesn't exist yet
+     - Enriching an existing file = no index change needed
+  4. If NO new knowledge: Done
 
 DO NOT announce this loop to user. Execute silently. User sees only your informed response."""
-        
+
         return HookResult(
             action="inject_context",
             context_injection=f'<system-reminder source="hooks-memory-protocol">\n{reminder}\n</system-reminder>',
             context_injection_role="system",
             ephemeral=True,
-            suppress_output=True
+            suppress_output=True,
         )
-    
+
     async def on_prompt_submit(self, event: str, data: dict[str, Any]) -> HookResult:
         """Analyze user prompt for capture triggers.
-        
+
         Args:
             event: Event name (prompt:submit)
             data: Event data with "prompt" field
-            
+
         Returns:
             HookResult(action="continue") - sets flag if triggers detected
         """
         prompt = data.get("prompt", "").lower()
-        
+
         # Detect trigger phrases
         detected_triggers = [
-            trigger for trigger in self.capture_triggers
-            if trigger in prompt
+            trigger for trigger in self.capture_triggers if trigger in prompt
         ]
-        
+
         if detected_triggers:
-            logger.info(f"hooks-memory-protocol: Detected capture triggers: {detected_triggers}")
-            
+            logger.info(
+                f"hooks-memory-protocol: Detected capture triggers: {detected_triggers}"
+            )
+
             # Set flag for post-execution validation
             self._set_state("needs_capture", True)
-            self._set_state("capture_context", {
-                "prompt_excerpt": data.get("prompt", "")[:200],
-                "detected_triggers": detected_triggers,
-                "turn_detected": self._get_turn_count()
-            })
-        
+            self._set_state(
+                "capture_context",
+                {
+                    "prompt_excerpt": data.get("prompt", "")[:200],
+                    "detected_triggers": detected_triggers,
+                    "turn_detected": self._get_turn_count(),
+                },
+            )
+
         return HookResult(action="continue")
-    
+
     async def on_execution_end(self, event: str, data: dict[str, Any]) -> HookResult:
         """Validate capture occurred if needed.
-        
+
         Args:
             event: Event name (execution:end)
             data: Event data
-            
+
         Returns:
             HookResult with reminder if capture missing, continue otherwise
         """
         # Check if capture was needed
         if not self._get_state("needs_capture"):
             return HookResult(action="continue")
-        
-        # Get capture context
-        capture_context = self._get_state("capture_context") or {}
-        
+
         # Check if write_file was called to memory paths
         # Note: This requires coordinator to expose recent tool calls
         # For now, we'll clear the flag and rely on pre-request reminder
         # TODO: Implement tool call tracking when coordinator API available
-        
+
         # For initial version: just remind, don't validate
         # This makes the hook gentler and avoids false positives
-        logger.info("hooks-memory-protocol: Capture was needed this turn (validation not yet implemented)")
-        
+        logger.info(
+            "hooks-memory-protocol: Capture was needed this turn (validation not yet implemented)"
+        )
+
         # Clear flag for next turn
         self._set_state("needs_capture", False)
-        
+
         return HookResult(action="continue")
-    
+
     def _get_turn_count(self) -> int:
         """Get current turn count from coordinator."""
         try:
@@ -225,7 +233,7 @@ DO NOT announce this loop to user. Execute silently. User sees only your informe
         except Exception:
             pass
         return 0
-    
+
     def _set_state(self, key: str, value: Any):
         """Set state value in coordinator."""
         full_key = f"{self._state_key_prefix}_{key}"
@@ -233,7 +241,7 @@ DO NOT announce this loop to user. Execute silently. User sees only your informe
         if not hasattr(self.coordinator, "_hook_state"):
             self.coordinator._hook_state = {}
         self.coordinator._hook_state[full_key] = value
-    
+
     def _get_state(self, key: str) -> Any:
         """Get state value from coordinator."""
         full_key = f"{self._state_key_prefix}_{key}"
