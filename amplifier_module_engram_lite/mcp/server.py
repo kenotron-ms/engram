@@ -180,7 +180,7 @@ def memory_index(
         str | None, "Full Markdown content to write (required for action='write')"
     ] = None,
 ) -> dict:
-    """Read, write, check status of, or rebuild MEMORY.md hot-surface files.
+    """Read, write, or check status of MEMORY.md hot-surface files.
 
     Use action='write' to update MEMORY.md with LLM-authored prose narrative content.
     """
