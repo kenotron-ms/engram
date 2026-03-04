@@ -27,19 +27,23 @@ Skip only for clearly self-contained tasks with no prior-context dimension.
 Answer using both the retrieved memories and current context. Do not mention that you consulted memory. Apply what you know as if you simply know it.
 
 **Phase 3 — CAPTURE**
-After the turn, silently capture anything worth retaining. Two steps:
+After the turn, silently capture anything worth retaining. For each thing worth capturing, follow this order:
 
-**Step A — Vector DB** (always do this first):
+1. **Assess hot-surface fit** — does this belong in MEMORY.md? It does if it's a standing preference, active project context, critical constraint, or key habit — something you'd want visible at every future session start without a search.
+
+2. **If hot-surface: update MEMORY.md first**
+```
+memory_index(action="read", scope="user")
+[incorporate the new information, rewrite as needed]
+memory_index(action="write", scope="user", content=<full updated markdown>)
+```
+
+3. **Capture to Vector DB** (always, for everything worth retaining)
 ```
 memory_capture(content, content_type, domain, space, importance)
 ```
 
-**Step B — MEMORY.md** (when the fact belongs in the hot surface):
-```
-1. memory_index(action="read", scope="user")
-2. [decide where it fits — hot fact or depth map entry]
-3. memory_index(action="write", scope="user", content=<full updated markdown>)
-```
+MEMORY.md is updated *before* the DB capture so the hot surface stays in sync with what you're about to archive. If a fact is DB-only, check whether its topic should appear in the depth map.
 
 </protocol>
 
