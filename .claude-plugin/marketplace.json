@@ -10,10 +10,7 @@
   "plugins": [
     {
       "name": "engram-lite",
-      "source": {
-        "source": "github",
-        "repo": "kenotron-ms/engram-lite"
-      },
+      "source": "./",
       "description": "Dual-route semantic memory — captures knowledge across sessions, injects relevant context via MEMORY.md at session start, and exposes 9 MCP tools for capture, recall, and knowledge-graph exploration",
       "version": "0.1.0",
       "author": {
