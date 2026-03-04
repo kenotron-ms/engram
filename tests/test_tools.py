@@ -5,6 +5,7 @@ from amplifier_module_engram_lite.tools.capture import memory_capture
 from amplifier_module_engram_lite.tools.manage import (
     memory_forget,
     memory_graph_explore,
+    memory_index,
     memory_relate,
     memory_stats,
     memory_update,
@@ -13,6 +14,47 @@ from amplifier_module_engram_lite.tools.recall import memory_recall, memory_sear
 
 
 class TestCapture:
+    def test_capture_deduplicates_identical_content(self, conn, tmp_path):
+        """Second capture of identical content reuses the existing memory_id."""
+        r1 = memory_capture(
+            conn,
+            "User always prefers dark mode in all applications",
+            content_type="preference",
+            domain="personal/prefs",
+            project_dir=tmp_path,
+        )
+        r2 = memory_capture(
+            conn,
+            "User always prefers dark mode in all applications",
+            content_type="preference",
+            domain="personal/prefs",
+            project_dir=tmp_path,
+        )
+        assert r1["memory_id"] == r2["memory_id"], "duplicate should reuse existing memory_id"
+        assert r2.get("deduplicated") is True
+        count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        assert count == 1, "only one DB record should exist"
+
+    def test_capture_does_not_dedup_dissimilar_content(self, conn, tmp_path):
+        """Clearly different content always creates a new memory."""
+        memory_capture(
+            conn,
+            "User prefers cats over dogs as pets",
+            content_type="preference",
+            domain="personal/prefs",
+            project_dir=tmp_path,
+        )
+        r2 = memory_capture(
+            conn,
+            "Use Redis for caching hot data in the API layer",
+            content_type="decision",
+            domain="professional/arch",
+            project_dir=tmp_path,
+        )
+        assert r2.get("deduplicated") is not True
+        count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        assert count == 2
+
     def test_capture_returns_required_fields(self, conn, tmp_path):
         r = memory_capture(
             conn, "test fact", content_type="fact", domain="test/domain", project_dir=tmp_path
@@ -139,10 +181,20 @@ class TestManage:
 
     def test_graph_explore_by_memory_id_returns_related(self, conn, tmp_path):
         """Given a memory_id as node_id, returns the memory and its related memories."""
-        r1 = memory_capture(conn, "PostgreSQL for concurrent writes", content_type="decision",
-                            domain="professional/arch", project_dir=tmp_path)
-        r2 = memory_capture(conn, "User prefers tabs over spaces", content_type="preference",
-                            domain="personal/prefs", project_dir=tmp_path)
+        r1 = memory_capture(
+            conn,
+            "PostgreSQL for concurrent writes",
+            content_type="decision",
+            domain="professional/arch",
+            project_dir=tmp_path,
+        )
+        r2 = memory_capture(
+            conn,
+            "User prefers tabs over spaces",
+            content_type="preference",
+            domain="personal/prefs",
+            project_dir=tmp_path,
+        )
         memory_relate(conn, r1["memory_id"], r2["memory_id"], "relates-to")
 
         g = memory_graph_explore(conn, node_id=r1["memory_id"])
@@ -156,10 +208,20 @@ class TestManage:
 
     def test_graph_explore_memory_id_includes_relation_metadata(self, conn, tmp_path):
         """Each node from relations traversal exposes 'related' edges."""
-        r1 = memory_capture(conn, "Use Redis for caching", content_type="decision",
-                            domain="professional/arch", project_dir=tmp_path)
-        r2 = memory_capture(conn, "Redis supports pub/sub", content_type="fact",
-                            domain="professional/arch", project_dir=tmp_path)
+        r1 = memory_capture(
+            conn,
+            "Use Redis for caching",
+            content_type="decision",
+            domain="professional/arch",
+            project_dir=tmp_path,
+        )
+        r2 = memory_capture(
+            conn,
+            "Redis supports pub/sub",
+            content_type="fact",
+            domain="professional/arch",
+            project_dir=tmp_path,
+        )
         memory_relate(conn, r1["memory_id"], r2["memory_id"], "supports")
 
         g = memory_graph_explore(conn, node_id=r1["memory_id"])
@@ -185,6 +247,85 @@ class TestManage:
         s = memory_stats(conn)
         assert s["total"] == 4
         assert s["graph_node_count"] > 0
+
+
+class TestRebuild:
+    def test_rebuild_no_longer_returns_cli_stub(self, conn, tmp_path):
+        """rebuild action replaces the 'Use CLI' stub with real in-process logic."""
+        result = memory_index(conn, action="rebuild", scope="user", project_dir=tmp_path)
+        assert result["action"] == "rebuild"
+        assert "Use CLI" not in str(result)
+        assert "files" in result
+
+    def test_rebuild_regenerates_project_md_from_db(self, tmp_path):
+        """rebuild writes a fresh MEMORY.md containing memories from the DB."""
+        from amplifier_module_engram_lite.db.schema import get_db
+
+        db_path = tmp_path / ".engram" / "engram.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        proj_conn, _ = get_db(db_path)
+
+        memory_capture(
+            proj_conn,
+            "canvas-api uses PostgreSQL in production",
+            content_type="decision",
+            domain="professional/arch",
+            space="project",
+            project_dir=tmp_path,
+        )
+        memory_capture(
+            proj_conn,
+            "API version is v2 as of March 2026",
+            content_type="fact",
+            domain="projects/canvas-api",
+            space="project",
+            project_dir=tmp_path,
+        )
+
+        result = memory_index(proj_conn, action="rebuild", scope="project", project_dir=tmp_path)
+        assert result["action"] == "rebuild"
+        file_result = result["files"][0]
+        assert file_result["rebuilt"] is True
+        assert file_result["entries"] == 2
+
+        md_path = tmp_path / ".engram" / "MEMORY.md"
+        assert md_path.exists()
+        content = md_path.read_text()
+        assert "PostgreSQL" in content
+        assert "API version" in content
+
+    def test_rebuild_sorts_critical_before_low(self, tmp_path):
+        """Rebuilt MEMORY.md lists critical/high importance entries before low ones."""
+        from amplifier_module_engram_lite.db.schema import get_db
+
+        db_path = tmp_path / ".engram" / "engram.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        proj_conn, _ = get_db(db_path)
+
+        memory_capture(
+            proj_conn,
+            "Low priority note about docs",
+            content_type="fact",
+            domain="projects/x",
+            space="project",
+            importance="low",
+            project_dir=tmp_path,
+        )
+        memory_capture(
+            proj_conn,
+            "CRITICAL: never expose API keys in logs",
+            content_type="constraint",
+            domain="professional/security",
+            space="project",
+            importance="critical",
+            project_dir=tmp_path,
+        )
+
+        memory_index(proj_conn, action="rebuild", scope="project", project_dir=tmp_path)
+        content = (tmp_path / ".engram" / "MEMORY.md").read_text()
+        critical_pos = content.find("CRITICAL")
+        low_pos = content.find("Low priority")
+        assert critical_pos < low_pos, "critical entries should appear before low entries"
 
 
 class TestRouter:

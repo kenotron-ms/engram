@@ -348,6 +348,87 @@ def memory_graph_explore(
     return {"nodes": nodes}
 
 
+def _rebuild_scope(
+    conn: sqlite3.Connection,
+    scope: str,
+    project_dir: Path | None = None,
+) -> dict:
+    """Regenerate MEMORY.md for one scope by querying the DB directly.
+
+    Reads all memories where ``space = scope``, sorts critical→high→medium→low,
+    caps at MAX_ENTRIES_TOTAL, and writes a fresh MEMORY.md file.
+    """
+    IMPORTANCE_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+    rows = conn.execute(
+        "SELECT id, content_type, importance, data FROM memories "
+        "WHERE space = ? ORDER BY created_at DESC",
+        (scope,),
+    ).fetchall()
+
+    # Primary sort: importance; secondary: recency already baked in via ORDER BY above
+    rows_sorted = sorted(rows, key=lambda r: IMPORTANCE_RANK.get(r["importance"], 2))
+    rows_sorted = rows_sorted[: mmd.MAX_ENTRIES_TOTAL]
+
+    entry_lines: list[str] = []
+    for row in rows_sorted:
+        d = json.loads(row["data"])
+        entry_type = mmd.ENTRY_TYPE_MAP.get(row["content_type"], "fact")
+        summary = d.get("summary", "")[:100]
+        entry_lines.append(f"- [{entry_type}] {summary}")
+
+    # Derive project name from directory for the section header
+    project_name = (project_dir or Path.cwd()).name if scope != "user" else "project"
+
+    # Recent events for ## Now section
+    event_rows = conn.execute(
+        "SELECT json_extract(data, '$.summary') FROM memories "
+        "WHERE space = ? AND content_type = 'event' ORDER BY created_at DESC LIMIT 5",
+        (scope,),
+    ).fetchall()
+    now_lines = [f"- [event] {r[0][:80]}" for r in event_rows if r[0]]
+    now_lines.append('→ Recall anything: memory_recall("{query}")')
+
+    now_ts = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    section = "## You" if scope == "user" else f"## Project: {project_name}"
+    comment = (
+        "<!-- Personal preferences, constraints, working style — added by memory_capture(). -->"
+        if scope == "user"
+        else "<!-- Project decisions, architecture, status"
+        " — added by memory_capture(space='project'). -->"
+    )
+    entry_block = "\n".join(entry_lines) if entry_lines else "→ No memories yet."
+    now_block = "\n".join(now_lines)
+
+    content = (
+        f"---\n"
+        f"scope: {scope}\n"
+        f"updated: {now_ts}\n"
+        f"managed-by: engram-lite\n"
+        f"entries: {len(entry_lines)}\n"
+        f"---\n\n"
+        f"# Memory\n\n"
+        f"{section}\n"
+        f"{comment}\n"
+        f"{entry_block}\n\n"
+        f"## Now\n"
+        f"<!-- Refreshed at session start. -->\n"
+        f"{now_block}\n"
+    )
+
+    path = mmd.get_path(scope, project_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+    return {
+        "scope": scope,
+        "rebuilt": True,
+        "entries": len(entry_lines),
+        "path": str(path),
+    }
+
+
 def memory_stats(
     conn: sqlite3.Connection,
     space: str | None = None,
@@ -453,6 +534,7 @@ def memory_index(
         return {"action": "status", "files": files}
 
     if action == "rebuild":
-        return {"action": "rebuild", "message": "Use CLI: engram-lite rebuild-index"}
+        files = [_rebuild_scope(conn, s, project_dir) for s in scopes]
+        return {"action": "rebuild", "files": files}
 
     return {"success": False, "error": f"unknown action: {action}"}

@@ -11,6 +11,8 @@ from pathlib import Path
 
 # ── Validation sets ──────────────────────────────────────────────────────────
 
+DEDUP_SIMILARITY_THRESHOLD = 0.95  # cosine similarity above which we treat as near-duplicate
+
 VALID_TYPES = {
     "fact",
     "preference",
@@ -168,12 +170,34 @@ def memory_capture(
     keywords = _extract_keywords(content, tags or [])
 
     # 5. Embed the content
+    from amplifier_module_engram_lite.db import memory_store as ms
     from amplifier_module_engram_lite.db import vector_store as vs
 
     embedding = vs.embed(f"{content_type}: {summary}\n\n{content[:512]}")
 
+    # 5b. Dedup check — skip insert if a near-identical memory already exists
+    existing_matches = vs.knn_search(conn, embedding, k=1)
+    if existing_matches:
+        best_id, best_sim = existing_matches[0]
+        if best_sim >= DEDUP_SIMILARITY_THRESHOLD:
+            existing_mem = ms.get_memory(conn, best_id, track_access=False)
+            if existing_mem:
+                from amplifier_module_engram_lite.db import memory_md as mmd_mod
+
+                existing_summary = existing_mem["data"].get("summary", "")
+                existing_etype = mmd_mod.ENTRY_TYPE_MAP.get(existing_mem["content_type"], "fact")
+                return {
+                    "memory_id": best_id,
+                    "summary": existing_summary,
+                    "domain": existing_mem["domain"],
+                    "tags": existing_mem["data"].get("tags", []),
+                    "keywords_count": len(existing_mem["data"].get("keywords", [])),
+                    "memory_md_entry": f"- [{existing_etype}] {existing_summary[:100]}",
+                    "deduplicated": True,
+                    "similarity": round(best_sim, 4),
+                }
+
     # 6. Insert into DB
-    from amplifier_module_engram_lite.db import memory_store as ms
 
     memory_id = ms.insert_memory(
         conn,
