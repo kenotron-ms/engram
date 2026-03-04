@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS memories (
     importance    TEXT NOT NULL CHECK (importance IN ('critical','high','medium','low')),
     confidence    REAL NOT NULL CHECK (confidence BETWEEN 0.0 AND 1.0),
     created_at    TEXT NOT NULL,
-    superseded_by TEXT,
     data          TEXT NOT NULL CHECK (json_valid(data))
 );
 
@@ -33,8 +32,6 @@ CREATE INDEX IF NOT EXISTS idx_mem_content_type ON memories(content_type);
 CREATE INDEX IF NOT EXISTS idx_mem_importance   ON memories(importance);
 CREATE INDEX IF NOT EXISTS idx_mem_confidence   ON memories(confidence);
 CREATE INDEX IF NOT EXISTS idx_mem_created_at   ON memories(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_mem_active       ON memories(id)
-    WHERE superseded_by IS NULL;
 
 CREATE TABLE IF NOT EXISTS memory_tags (
     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
@@ -87,8 +84,9 @@ CREATE TABLE IF NOT EXISTS capture_log (
 def load_vec(conn: sqlite3.Connection) -> bool:
     """Load sqlite-vec extension. Returns True on success."""
     try:
-        import sqlite_vec
+        import importlib
 
+        sqlite_vec = importlib.import_module("sqlite_vec")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)

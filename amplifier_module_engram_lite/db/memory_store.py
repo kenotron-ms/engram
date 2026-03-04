@@ -77,7 +77,7 @@ def insert_memory(
 def get_memory(conn: sqlite3.Connection, memory_id: str, track_access: bool = True) -> dict | None:
     """Fetch a memory by ID. Returns dict or None."""
     row = conn.execute(
-        "SELECT * FROM memories WHERE id = ? AND superseded_by IS NULL", (memory_id,)
+        "SELECT * FROM memories WHERE id = ?", (memory_id,)
     ).fetchone()
     if not row:
         return None
@@ -95,10 +95,10 @@ def get_memory(conn: sqlite3.Connection, memory_id: str, track_access: bool = Tr
     return result
 
 
-def soft_delete(conn: sqlite3.Connection, memory_id: str) -> bool:
-    cur = conn.execute(
-        "UPDATE memories SET superseded_by = '__deleted__' WHERE id = ?", (memory_id,)
-    )
+def delete_memory(conn: sqlite3.Connection, memory_id: str) -> bool:
+    """Hard delete — removes the row and all associated data via CASCADE."""
+    conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
+    cur = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
     conn.commit()
     return cur.rowcount > 0
 
@@ -110,8 +110,8 @@ def get_all(
     content_type: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """List active memories with optional filters."""
-    where = ["superseded_by IS NULL"]
+    """List memories with optional filters."""
+    where: list[str] = []
     params: list = []
     if space:
         where.append("space = ?")
@@ -141,7 +141,7 @@ def fts_search(conn: sqlite3.Connection, query: str, limit: int = 5) -> list[dic
         """SELECT m.*, fts.rank
            FROM memory_fts fts
            JOIN memories m ON m.id = fts.memory_id
-           WHERE memory_fts MATCH ? AND m.superseded_by IS NULL
+           WHERE memory_fts MATCH ?
            ORDER BY fts.rank
            LIMIT ?""",
         (query, limit),
@@ -156,23 +156,21 @@ def fts_search(conn: sqlite3.Connection, query: str, limit: int = 5) -> list[dic
 
 
 def stats(conn: sqlite3.Connection) -> dict:
-    total = conn.execute("SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL").fetchone()[0]
+    total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     by_type = {
         row[0]: row[1]
         for row in conn.execute(
-            "SELECT content_type, COUNT(*) FROM memories"
-            " WHERE superseded_by IS NULL GROUP BY content_type"
+            "SELECT content_type, COUNT(*) FROM memories GROUP BY content_type"
         ).fetchall()
     }
     by_space = {
         row[0]: row[1]
         for row in conn.execute(
-            "SELECT space, COUNT(*) FROM memories WHERE superseded_by IS NULL GROUP BY space"
+            "SELECT space, COUNT(*) FROM memories GROUP BY space"
         ).fetchall()
     }
     by_domain = conn.execute(
-        "SELECT domain, COUNT(*) as n FROM memories WHERE superseded_by IS NULL"
-        " GROUP BY domain ORDER BY n DESC LIMIT 5"
+        "SELECT domain, COUNT(*) as n FROM memories GROUP BY domain ORDER BY n DESC LIMIT 5"
     ).fetchall()
     return {
         "total": total,

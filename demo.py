@@ -70,7 +70,7 @@ def print_memory(mem: dict, index: int | None = None, show_id: bool = True) -> N
     d = mem["data"]
     imp_color = IMPORTANCE_COLORS.get(mem["importance"], "")
     icon = TYPE_ICONS.get(mem["content_type"], "·")
-    prefix = f"{c(index, BOLD, CYAN)}. " if index is not None else ""
+    prefix = f"{c(str(index), BOLD, CYAN)}. " if index is not None else ""
     print(f"\n{prefix}{c(icon + ' ' + mem['content_type'], imp_color)}  {c(mem['domain'], DIM)}")
     print(f"  {c(d.get('summary', d.get('content', '')[:80]), BOLD)}")
     if d.get("tags"):
@@ -350,7 +350,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
                     icon = TYPE_ICONS.get(mem["content_type"], "·")
                     bar_len = int(score * 20)
                     bar = c("█" * bar_len, GREEN) + c("░" * (20 - bar_len), GRAY)
-                    print(f"\n  {c(i, BOLD)} {bar} {c(f'{score:.2f}', BOLD, GREEN)}")
+                    print(f"\n  {c(str(i), BOLD)} {bar} {c(f'{score:.2f}', BOLD, GREEN)}")
                     print(f"    {icon} {c(d.get('summary', ''), BOLD)}  {c(mem['domain'], DIM)}")
                     if d.get("tags"):
                         print(f"    {c(' '.join('#' + t for t in d['tags']), CYAN)}")
@@ -379,7 +379,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             if not rest:
                 print(c("  Usage: forget <memory-id>", GRAY))
                 continue
-            ok = ms.soft_delete(conn, rest.strip())
+            ok = ms.delete_memory(conn, rest.strip())
             vs.delete_vector(conn, rest.strip())
             if ok:
                 print(
