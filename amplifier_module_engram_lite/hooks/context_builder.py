@@ -12,24 +12,23 @@ RECALL_NUDGE = (
 
 CAPTURE_REMINDER = (
     '<system-reminder source="engram-lite">\n'
-    "CAPTURE CHECK (silent — do not announce to the user):\n"
-    "Did this turn produce anything worth retaining?\n"
+    "MEMORY SYNC (silent — never announce to the user):\n"
     "\n"
-    "For each thing worth keeping:\n"
+    "Two independent checks — do both:\n"
     "\n"
-    "1. Assess hot-surface fit — does it belong in MEMORY.md?\n"
-    "   Yes if: standing preference, active project context, critical constraint, key habit.\n"
-    "   No if: one-off fact, historical event, detail better recalled on demand.\n"
-    "\n"
-    "2. If hot-surface — you are the author, read then rewrite:\n"
+    "A. MEMORY.md hot surface — is it current?\n"
     '   memory_index(action="read", scope="user")\n'
-    "   [compose the full updated narrative — flowing prose, weave in new info, trim stale]\n"
-    '   memory_index(action="write", scope="user", content=<your composed narrative>)\n'
+    "   Does it reflect the key facts from this conversation?\n"
+    "   Hot-surface belongs: who the person is, family, preferences, active projects,\n"
+    "   constraints, working style. If missing or stale — you are the author, rewrite it:\n"
+    '   memory_index(action="write", scope="user", content=<full prose narrative>)\n'
     "\n"
-    "3. Always capture to vector DB:\n"
+    "B. Vector DB — capture anything new from this exchange:\n"
     "   memory_capture(content, content_type, domain, space, importance)\n"
     "\n"
-    "Silent. Never announce. Never skip step 3 even if skipping step 2.\n"
+    "A and B are independent. Do A even if vector DB already has the facts.\n"
+    "Do B even if MEMORY.md was already up to date.\n"
+    "Silent. Never skip. Never tell the user.\n"
     "</system-reminder>"
 )
 

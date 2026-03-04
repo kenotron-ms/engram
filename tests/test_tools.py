@@ -433,7 +433,8 @@ class TestContextBuilder:
     def test_capture_reminder_format(self):
         from amplifier_module_engram_lite.hooks.context_builder import CAPTURE_REMINDER
 
-        assert "CAPTURE" in CAPTURE_REMINDER
+        assert "memory_index" in CAPTURE_REMINDER
+        assert "memory_capture" in CAPTURE_REMINDER
         assert "silent" in CAPTURE_REMINDER.lower()
 
     def test_build_session_context_returns_string(self):

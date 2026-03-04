@@ -35,7 +35,7 @@ class EngramLiteHook:
         self.project_db: str = config.get("project_db", ".engram/engram.db")
 
     def register(self, hooks: Any) -> None:
-        """Register all three lifecycle hooks with the provided hook registry."""
+        """Register lifecycle hooks with the provided hook registry."""
         hooks.register(
             "session:start",
             self.on_session_start,
@@ -44,14 +44,14 @@ class EngramLiteHook:
         )
         hooks.register(
             "prompt:submit",
-            self.on_prompt_submit,
+            self.on_capture_reminder,
             priority=self.priority,
-            name="engram-lite",
+            name="engram-lite-capture",
         )
         hooks.register(
-            "orchestrator:complete",
-            self.on_turn_complete,
-            priority=self.priority + 5,
+            "prompt:submit",
+            self.on_prompt_submit,
+            priority=self.priority + 1,
             name="engram-lite",
         )
 
@@ -69,6 +69,18 @@ class EngramLiteHook:
             suppress_output=True,
         )
 
+    async def on_capture_reminder(self, event: str, data: dict[str, Any]) -> Any:
+        """Inject capture reminder before each LLM call so the model processes
+        pending captures from the previous turn before responding."""
+        from amplifier_module_engram_lite.hooks.context_builder import CAPTURE_REMINDER
+
+        return _hook_result(
+            action="inject_context",
+            context_injection=CAPTURE_REMINDER,
+            ephemeral=True,
+            suppress_output=True,
+        )
+
     async def on_prompt_submit(self, event: str, data: dict[str, Any]) -> Any:
         """Inject recall nudge before each LLM call."""
         from amplifier_module_engram_lite.hooks.context_builder import RECALL_NUDGE
@@ -76,17 +88,6 @@ class EngramLiteHook:
         return _hook_result(
             action="inject_context",
             context_injection=RECALL_NUDGE,
-            ephemeral=True,
-            suppress_output=True,
-        )
-
-    async def on_turn_complete(self, event: str, data: dict[str, Any]) -> Any:
-        """Inject capture reminder after each turn."""
-        from amplifier_module_engram_lite.hooks.context_builder import CAPTURE_REMINDER
-
-        return _hook_result(
-            action="inject_context",
-            context_injection=CAPTURE_REMINDER,
             ephemeral=True,
             suppress_output=True,
         )
