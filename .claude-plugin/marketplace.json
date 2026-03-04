@@ -3,11 +3,26 @@
   "owner": {
     "name": "kenotron-ms"
   },
+  "metadata": {
+    "description": "Dual-route semantic memory for Claude Code — captures knowledge across sessions, injects context via MEMORY.md, 9 MCP tools.",
+    "version": "0.1.0"
+  },
   "plugins": [
     {
       "name": "engram-lite",
-      "source": ".",
-      "description": "Dual-route semantic memory — captures knowledge across sessions, injects relevant context via MEMORY.md at session start, and exposes 9 MCP tools for capture, recall, and knowledge-graph exploration"
+      "source": {
+        "source": "github",
+        "repo": "kenotron-ms/engram-lite"
+      },
+      "description": "Dual-route semantic memory — captures knowledge across sessions, injects relevant context via MEMORY.md at session start, and exposes 9 MCP tools for capture, recall, and knowledge-graph exploration",
+      "version": "0.1.0",
+      "author": {
+        "name": "kenotron-ms"
+      },
+      "homepage": "https://github.com/kenotron-ms/engram-lite",
+      "license": "MIT",
+      "keywords": ["memory", "knowledge", "persistence", "recall", "mcp", "rag"],
+      "category": "productivity"
     }
   ]
 }
