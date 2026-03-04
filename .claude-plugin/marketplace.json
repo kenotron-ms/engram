@@ -1,0 +1,23 @@
+{
+  "name": "engram-lite",
+  "owner": {
+    "name": "kenotron-ms",
+    "url": "https://github.com/kenotron-ms"
+  },
+  "metadata": {
+    "description": "engram-lite — persistent vector memory plugin for Claude Code"
+  },
+  "plugins": [
+    {
+      "name": "engram-lite",
+      "source": {
+        "source": "github",
+        "repo": "kenotron-ms/engram-lite"
+      },
+      "description": "Persistent vector memory — dual-route semantic recall, MEMORY.md hot surface, 9 MCP tools",
+      "version": "0.1.0",
+      "category": "productivity",
+      "tags": ["memory", "persistence", "rag", "knowledge", "mcp"]
+    }
+  ]
+}
