@@ -19,6 +19,12 @@ _engram() {
 
 printf '<system-reminder source="engram-lite">\n'
 
+# Memory instructions and tool awareness
+cat "${CLAUDE_PLUGIN_ROOT}/context/memory-instructions.md" 2>/dev/null || true
+printf '\n'
+cat "${CLAUDE_PLUGIN_ROOT}/context/memory-awareness.md" 2>/dev/null || true
+printf '\n'
+
 injected=0
 
 # User-scope MEMORY.md
