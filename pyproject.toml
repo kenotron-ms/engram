@@ -44,6 +44,7 @@ dev = [
 
 [project.scripts]
 engram-lite = "amplifier_module_engram_lite.cli:main"
+engram-lite-mcp = "amplifier_module_engram_lite.mcp.server:main"
 
 [project.entry-points."amplifier.modules"]
 engram-lite-hook = "amplifier_module_engram_lite.hooks.amplifier_hook:mount"

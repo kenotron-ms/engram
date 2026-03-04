@@ -1,0 +1,27 @@
+{
+  "name": "engram-lite",
+  "version": "0.1.0",
+  "description": "Persistent vector memory for Claude Code — dual-route recall + MEMORY.md hot surface",
+  "author": {
+    "name": "kenotron-ms",
+    "url": "https://github.com/kenotron-ms/engram-lite"
+  },
+  "hooks": {
+    "SessionStart": {
+      "type": "command",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+      "timeout": 10
+    },
+    "UserPromptSubmit": {
+      "type": "command",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/prompt-submit.sh",
+      "timeout": 3
+    },
+    "Stop": {
+      "type": "command",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh",
+      "timeout": 3
+    }
+  },
+  "mcpServers": "../.mcp.json"
+}

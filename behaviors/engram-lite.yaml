@@ -1,0 +1,21 @@
+bundle:
+  name: engram-lite-behavior
+  version: 0.1.0
+  description: Persistent vector memory — hooks + tools for Amplifier agents
+
+hooks:
+  - module: engram-lite-hook
+    source: git+https://github.com/kenotron-ms/engram-lite@main
+    config:
+      priority: 5
+      inject_role: system
+
+tools:
+  - module: engram-lite-tool
+    source: git+https://github.com/kenotron-ms/engram-lite@main
+    config:
+      max_results: 20
+
+context:
+  include:
+    - engram-lite:context/memory-awareness.md
