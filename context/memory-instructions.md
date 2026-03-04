@@ -31,19 +31,29 @@ After the turn, silently capture anything worth retaining. For each thing worth 
 
 1. **Assess hot-surface fit** — does this belong in MEMORY.md? It does if it's a standing preference, active project context, critical constraint, or key habit — something you'd want visible at every future session start without a search.
 
-2. **If hot-surface: update MEMORY.md first**
-```
-memory_index(action="read", scope="user")
-[incorporate the new information, rewrite as needed]
-memory_index(action="write", scope="user", content=<full updated markdown>)
-```
+2. **If hot-surface: compose and write MEMORY.md first**
+
+   a. Read the current file:
+   ```
+   memory_index(action="read", scope="user")
+   ```
+
+   b. Reason about the full picture — what belongs in the narrative, what goes depth-map only, what can be dropped. Then compose the complete updated narrative.
+
+   c. Write it agentically using bash:
+   ```bash
+   cat > ~/.engram/MEMORY.md << 'EOF'
+   <your composed narrative here>
+   EOF
+   ```
+   *(For project scope, write to `.engram/MEMORY.md` in the project root instead.)*
 
 3. **Capture to Vector DB** (always, for everything worth retaining)
 ```
 memory_capture(content, content_type, domain, space, importance)
 ```
 
-MEMORY.md is updated *before* the DB capture so the hot surface stays in sync with what you're about to archive. If a fact is DB-only, check whether its topic should appear in the depth map.
+MEMORY.md is written *before* the DB capture so the hot surface stays in sync with what you're about to archive. If a fact is DB-only, check whether its topic should appear in the depth map.
 
 </protocol>
 
@@ -76,29 +86,25 @@ Capture after turns that contain:
 
 <format_rules>
 
-Write MEMORY.md the way you'd write notes to yourself before a meeting — what you'd want to already know walking in. Two zones:
+Write MEMORY.md as a short narrative — the kind of thing a thoughtful colleague would have already internalized about this person and project. Flowing prose, not key-value entries. Two zones:
 
-**Zone 1 — Hot facts:** Prose or tight bullets. What's always relevant. The AI reads this and simply *knows* it.
+**Zone 1 — Narrative:** Paragraphs that read naturally. Weave together who the person is, what they're working on, and the constraints that matter. The AI reads this and simply *knows* it.
 
 **Zone 2 — Depth map:** After a `---` separator. One line signalling what topics exist in the DB, with a single hint on how to surface them. Not every topic — just the ones a future session might need but won't see coming.
 
 ```markdown
-[Name] — Python developer, tabs not spaces. Numbered lists, not bullets.
-Redmond area; Cafe H > Cafe 99.
+Ken is a Python developer based in the Redmond area. He uses tabs over spaces and prefers numbered lists. Cafe H is his regular spot over Cafe 99.
 
-canvas-api: FastAPI + PostgreSQL on Kubernetes/AKS.
-Nginx handles SSL (30s upstream timeout). Spot instances for cost savings.
-
-Currently working on engram-lite — two-layer memory system for Amplifier.
+He's currently building engram-lite, a two-layer memory system for Amplifier. The canvas-api project runs FastAPI with PostgreSQL on Kubernetes/AKS, with Nginx handling SSL termination at a 30-second upstream timeout. Spot instances keep costs down.
 
 ---
 More on: canvas-api architecture decisions · deployment config · debugging history · team contacts
 → memory_recall("topic") to surface it
 ```
 
-- No frontmatter. No `[type]` tags. No rigid section headers.
+- No frontmatter. No `[type]` tags. No rigid section headers. No bullet lists in Zone 1.
 - Keep Zone 1 under ~20 lines. Depth map under ~5 lines.
-- Reorganise freely as context shifts. What's "now" today may not matter next week.
+- Rewrite freely as context shifts — it's a living document, not an append-only log.
 - Depth map entries are topic labels, not query strings. One hint line for the tool call is enough.
 
 </format_rules>
