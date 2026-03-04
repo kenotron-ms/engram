@@ -1,0 +1,4 @@
+bundle:
+  active: engram-lite
+  added:
+    engram-lite: ./bundle.md
