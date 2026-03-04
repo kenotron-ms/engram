@@ -114,7 +114,7 @@ pip install engram-lite
 ### From source
 
 ```bash
-git clone https://github.com/kenotron-ms/amplifier-module-engram-lite.git
+git clone https://github.com/kenotron-ms/engram-lite.git
 cd amplifier-module-engram-lite
 pip install -e ".[dev]"
 ```
@@ -357,7 +357,7 @@ amplifier-module-engram-lite/
 ### Setup
 
 ```bash
-git clone https://github.com/kenotron-ms/amplifier-module-engram-lite.git
+git clone https://github.com/kenotron-ms/engram-lite.git
 cd amplifier-module-engram-lite
 python -m venv .venv
 source .venv/bin/activate

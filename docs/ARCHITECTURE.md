@@ -1039,6 +1039,93 @@ storage:
 
 ---
 
+## 10. Architecture Decision Records
+
+Key design decisions captured here for future contributors. Each ADR records what was decided, why, and what would change the decision.
+
+---
+
+### ADR-001: Agentic RAG over Pipeline RAG
+
+**Status:** Decided  
+**Date:** 2026-03-03
+
+**Decision:** engram-lite does NOT implement automatic pipeline RAG (embed every query → KNN → inject top-k). Instead it uses agentic RAG: the AI decides when to retrieve, guided by hook reminders.
+
+**Two-tier hot/deep architecture:**
+
+```
+Hot tier  — MEMORY.md (always in context, no retrieval cost)
+            ≤100 lines per scope, pre-computed, injected at session:start
+            Covers: critical preferences, active project state, recent events
+
+Deep tier — memory_recall(query) tool (on-demand, dual-route)
+            Vector KNN + BM25 + hierarchical graph
+            Triggered by: AI judgment + prompt:submit hook reminder
+```
+
+**Why not pipeline RAG:**
+
+| Concern | Pipeline RAG | Agentic RAG (our choice) |
+|---------|-------------|--------------------------|
+| Cost | Vector query every message | Only when agent decides it's relevant |
+| Noise | May inject stale/irrelevant memories | Agent can scope the query precisely |
+| Hot context | Not addressed | MEMORY.md handles this always |
+| Failure mode | Over-injection | Under-recall (mitigated by hook reminder) |
+
+**What mitigates under-recall:**
+1. `prompt:submit` hook injects: *"Does this relate to prior context? → memory_recall()"*
+2. MEMORY.md already surfaces the most important items — often enough to answer or signal that deeper retrieval is needed
+3. The AI can scope queries precisely: `memory_recall("kubernetes timeout", domain="professional/engineering")`
+
+**What would change this decision:**  
+If production usage shows the AI consistently fails to self-recall when it should, despite the hook reminder, add an automatic pre-response retrieval step in the `prompt:submit` hook. This is a one-line config change, not an architecture change.
+
+---
+
+### ADR-002: MEMORY.md as engram-lite's own hot surface
+
+**Status:** Decided  
+**Date:** 2026-03-03
+
+**Decision:** engram-lite maintains its own MEMORY.md files at predictable paths. It does NOT rely on Claude Code's native auto-memory injection (`~/.claude/projects/<encoded>/memory/MEMORY.md`).
+
+**Paths:**
+```
+~/.engram/MEMORY.md          # user scope  — private, cross-project
+.engram/MEMORY.md            # project scope — committable to git
+.engram/MEMORY.local.md      # local scope  — gitignored
+```
+
+**Why not Claude Code's native auto-memory:**
+- Native path encoding (`<encoded>`) is undocumented — unpredictable for a plugin to write to
+- Native feature is Claude Code-only — Amplifier wouldn't benefit
+- Owning the files means the same injection works identically on both platforms via the hook system
+- Gives us control over format, scopes, line budget, and pruning logic
+
+**What would change this decision:**  
+If Anthropic publishes a stable, documented API for writing to the auto-memory path, we could optionally sync to it as well. The internal format would stay unchanged.
+
+---
+
+### ADR-003: SQLite + sqlite-vec over dedicated vector DB
+
+**Status:** Decided  
+**Date:** 2026-03-03
+
+**Decision:** Single `engram.db` SQLite file with the sqlite-vec extension for KNN. No external vector database (Pinecone, Qdrant, Chroma, etc.).
+
+**Why:**
+- Zero infra — works offline, no account, no API key beyond embeddings
+- Portable — the DB file is the entire memory store; copy it anywhere
+- Sufficient scale — sqlite-vec handles 100K+ memories at <100ms KNN
+- Native FTS5 in SQLite handles BM25 for hybrid search
+
+**What would change this decision:**  
+Multi-user/team shared memory at scale (>1M memories, concurrent writes from multiple machines). At that point a server-backed vector DB would be appropriate — the `EmbeddingProvider` abstraction already anticipates this swap.
+
+---
+
 ## Appendix A: Technology Choices Summary
 
 | Component | Technology | Rationale |

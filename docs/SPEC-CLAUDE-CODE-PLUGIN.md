@@ -107,7 +107,7 @@ claude-code/
   "description": "Persistent memory system for Claude Code. Provides cross-session knowledge retention with automatic capture, semantic recall, and knowledge graph traversal.",
   "author": "engram-lite",
   "license": "MIT",
-  "homepage": "https://github.com/engram-lite/engram-lite",
+  "homepage": "https://github.com/kenotron-ms/engram-lite",
 
   "hooks": {
     "SessionStart": [
@@ -1793,7 +1793,7 @@ Include the database in version control. Team members' personal memories still r
     "name": "engram-lite",
     "url": "https://github.com/engram-lite"
   },
-  "repository": "https://github.com/engram-lite/engram-lite",
+  "repository": "https://github.com/kenotron-ms/engram-lite",
   "license": "MIT",
   "categories": [
     "productivity",
