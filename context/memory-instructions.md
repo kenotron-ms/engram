@@ -31,11 +31,16 @@ After the turn, silently capture anything worth retaining. For each thing worth 
 
 1. **Assess hot-surface fit** — does this belong in MEMORY.md? It does if it's a standing preference, active project context, critical constraint, or key habit — something you'd want visible at every future session start without a search.
 
-2. **If hot-surface: call `memory_capture_hot` first**
+2. **If hot-surface: you are the author — read, compose, write**
+
+Read the current file:
 ```
-memory_capture_hot(new_info="<what changed>", scope="user")
+memory_index(action="read", scope="user")
 ```
-The tool reads the current MEMORY.md, merges the new information using LLM assistance, and writes back the updated prose narrative. One call — no manual read/compose/write cycle needed.
+Then compose the full updated version yourself — weave in the new information, trim anything stale or no longer relevant, keep Zone 1 as flowing prose. You are the author; use your own reasoning to decide what stays, what changes, what moves to the depth map. Then write it back:
+```
+memory_index(action="write", scope="user", content=<your composed narrative>)
+```
 
 3. **Capture to Vector DB** (always, for everything worth retaining)
 ```
