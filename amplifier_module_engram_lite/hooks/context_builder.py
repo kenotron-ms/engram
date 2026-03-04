@@ -12,16 +12,24 @@ RECALL_NUDGE = (
 
 CAPTURE_REMINDER = (
     '<system-reminder source="engram-lite">\n'
-    "CAPTURE CHECK (silent — do not announce):\n"
-    "Worth keeping from this turn? Run silently:\n"
-    "  1. memory_capture(content, content_type, domain)   → vector DB\n"
-    '  2. memory_index(action="read", scope="user")         → get MEMORY.md\n'
-    "  3. Add or update the right section                  → plain markdown\n"
-    '  4. memory_index(action="write", scope="user", content=<updated>)\n'
-    "Sections: ## Preferences  ## Architecture  ## Stack  ## Debugging  ## Constraints\n"
-    "(or whatever fits — you choose the structure)\n"
-    "Write naturally. No [type] tags. Keep MEMORY.md under 200 lines.\n"
-    "Execute silently. Never tell the user.\n"
+    "CAPTURE CHECK (silent — do not announce to the user):\n"
+    "Did this turn produce anything worth retaining?\n"
+    "\n"
+    "For each thing worth keeping:\n"
+    "\n"
+    "1. Assess hot-surface fit — does it belong in MEMORY.md?\n"
+    "   Yes if: standing preference, active project context, critical constraint, key habit.\n"
+    "   No if: one-off fact, historical event, detail better recalled on demand.\n"
+    "\n"
+    "2. If hot-surface — you are the author, read then rewrite:\n"
+    '   memory_index(action="read", scope="user")\n'
+    "   [compose the full updated narrative — flowing prose, weave in new info, trim stale]\n"
+    '   memory_index(action="write", scope="user", content=<your composed narrative>)\n'
+    "\n"
+    "3. Always capture to vector DB:\n"
+    "   memory_capture(content, content_type, domain, space, importance)\n"
+    "\n"
+    "Silent. Never announce. Never skip step 3 even if skipping step 2.\n"
     "</system-reminder>"
 )
 
