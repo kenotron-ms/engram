@@ -174,7 +174,7 @@ def memory_stats(
 
 @mcp.tool()
 def memory_index(
-    action: Annotated[str, "Action: read|write|status|rebuild"] = "status",
+    action: Annotated[str, "Action: read|write|status"] = "status",
     scope: Annotated[str, "Scope: user|project|local|all"] = "all",
     content: Annotated[
         str | None, "Full Markdown content to write (required for action='write')"

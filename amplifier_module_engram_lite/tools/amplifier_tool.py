@@ -413,8 +413,8 @@ class MemoryIndexTool(_BaseTool):
     @property
     def description(self) -> str:
         return (
-            "Read, write, check status of, or rebuild MEMORY.md hot-surface files. "
-            "Use action='write' to update MEMORY.md with LLM-authored content."
+            "Read, write, or check status of MEMORY.md hot-surface files. "
+            "Use action='write' to update MEMORY.md with LLM-authored prose narrative content."
         )
 
     @property
@@ -424,7 +424,7 @@ class MemoryIndexTool(_BaseTool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "status", "rebuild"],
+                    "enum": ["read", "write", "status"],
                     "default": "read",
                 },
                 "scope": {
@@ -451,4 +451,3 @@ class MemoryIndexTool(_BaseTool):
                 content=input.get("content"),
             ),
         )
-
