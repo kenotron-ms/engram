@@ -6,6 +6,5 @@
     "name": "kenotron-ms",
     "url": "https://github.com/kenotron-ms/engram-lite"
   },
-  "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json"
+  "hooks": "./hooks/hooks.json"
 }
