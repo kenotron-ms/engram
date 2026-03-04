@@ -49,7 +49,7 @@ engram-lite-hook = "amplifier_module_engram_lite.hooks.amplifier_hook:mount"
 engram-lite-tool = "amplifier_module_engram_lite.tools.amplifier_tool:mount"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/amplifier_module_engram_lite"]
+packages = ["amplifier_module_engram_lite"]
 
 [tool.ruff]
 target-version = "py311"
