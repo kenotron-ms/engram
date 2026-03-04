@@ -1,7 +1,12 @@
 {
   "mcpServers": {
     "engram-lite": {
-      "command": "engram-lite-mcp",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "git+https://github.com/kenotron-ms/engram-lite",
+        "engram-lite-mcp"
+      ],
       "env": {
         "ENGRAM_USER_DB": "${HOME}/.engram/engram.db",
         "ENGRAM_PROJECT_DB": "${PWD}/.engram/engram.db"

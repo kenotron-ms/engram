@@ -20,8 +20,10 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "amplifier-core>=1.0.0",
+    # No amplifier-core here — it's a peer dep only needed for Amplifier integration.
+    # Claude Code / uvx users install this package without amplifier-core.
     "sqlite-vec>=0.1.6",
+    "sentence-transformers>=3.0",  # default embedding backend — always required
     "httpx>=0.27.0",
     "pydantic>=2.0",
     "click>=8.0",
@@ -29,11 +31,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+amplifier = ["amplifier-core>=1.0.0"]   # only needed for Amplifier hook/tool modules
 openai = ["openai>=1.0.0"]
 azure = ["openai>=1.0.0", "azure-identity>=1.15.0"]
 ollama = ["ollama>=0.2.0"]
-local = ["sentence-transformers>=3.0"]
-all = ["openai>=1.0.0", "azure-identity>=1.15.0", "ollama>=0.2.0", "sentence-transformers>=3.0"]
+all = ["amplifier-core>=1.0.0", "openai>=1.0.0", "azure-identity>=1.15.0", "ollama>=0.2.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

@@ -61,102 +61,107 @@ The system auto-selects the route per query, or you can force one via the `route
 
 ## Quick start
 
+### Claude Code — zero install
+
+No `pip install` required. Copy `.mcp.json` into your project root and Claude Code handles the rest:
+
+```bash
+# Option A — copy the included .mcp.json into your project
+cp /path/to/engram-lite/.mcp.json .
+
+# Option B — register directly with claude mcp
+claude mcp add --transport stdio engram-lite -- \
+  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
+
+# That's it. Start Claude Code — memory is active automatically.
+claude
+```
+
+On first use, `uvx` downloads and caches the package. Subsequent sessions start in under a second.
+
 ### Amplifier
 
 ```bash
-# Install the package
-pip install engram-lite
+# Add the bundle to your root bundle.md — Amplifier handles installation.
+# includes:
+#   - bundle: git+https://github.com/kenotron-ms/engram-lite@main
 
-# Add to your Amplifier root bundle (behaviors list):
-#   behaviors:
-#     - engram-lite
-
-# Set your embedding provider
-export OPENAI_API_KEY="sk-..."
-
-# Run Amplifier — memory is active automatically
 amplifier run
 ```
 
-### Claude Code
+### Initialize MEMORY.md (optional, one-time)
 
 ```bash
-# Install the package
-pip install engram-lite
-
-# Install the Claude Code plugin
-claude plugin install engram-lite
-
-# Register the MCP server (adds to .mcp.json)
-engram-lite install-mcp
-
-# Set your embedding provider
-export OPENAI_API_KEY="sk-..."
-
-# Start Claude Code — memory is active automatically
-claude
+# Sets up ~/.engram/ and .engram/ with blank MEMORY.md files.
+# Run this once to get a clean starting state.
+uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
 ```
 
 ## Installation
 
-### Prerequisites
+### Claude Code — no install needed
 
-- Python 3.11+
-- SQLite 3.41+ (ships with Python 3.11+)
-- An embedding provider: OpenAI (default), Azure OpenAI, or Ollama for local embeddings
+The `.mcp.json` in this repo uses `uvx`, so Claude Code downloads and runs the server
+automatically on first use. Nothing to install.
 
-### From PyPI
-
-```bash
-pip install engram-lite
-```
-
-### From source
+**Option A — copy `.mcp.json` into your project:**
 
 ```bash
-git clone https://github.com/kenotron-ms/engram-lite.git
-cd amplifier-module-engram-lite
-pip install -e ".[dev]"
+curl -sO https://raw.githubusercontent.com/kenotron-ms/engram-lite/main/.mcp.json
 ```
 
-### Platform-specific setup
-
-**Amplifier** — The package registers itself automatically via Python entry points. After `pip install`, the `engram-lite` behavior bundle and its hook/tool modules are discoverable by Amplifier:
-
-```yaml
-# In your root bundle's behaviors list:
-behaviors:
-  - engram-lite
-```
-
-**Claude Code** — The package provides a CLI installer that sets up the plugin hooks, MCP server registration, and slash commands:
+**Option B — register manually:**
 
 ```bash
-# Installs plugin hooks + slash commands into Claude Code
-claude plugin install engram-lite
-
-# Registers the MCP server in .mcp.json (project-level)
-engram-lite install-mcp
-
-# Or register globally
-engram-lite install-mcp --global
+claude mcp add --transport stdio engram-lite -- \
+  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
 ```
 
-The MCP server entry in `.mcp.json`:
+**`.mcp.json` contents (for reference):**
 
 ```json
 {
   "mcpServers": {
     "engram-lite": {
-      "command": "engram-lite",
-      "args": ["mcp-server"],
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/kenotron-ms/engram-lite", "engram-lite-mcp"],
       "env": {
-        "ENGRAM_USER_DB": "~/.engram/engram.db",
-        "ENGRAM_PROJECT_DB": ".engram/engram.db"
+        "ENGRAM_USER_DB": "${HOME}/.engram/engram.db",
+        "ENGRAM_PROJECT_DB": "${PWD}/.engram/engram.db"
       }
     }
   }
 }
+```
+
+### Amplifier
+
+The bundle installs itself when Amplifier runs — no separate `pip install` required.
+Add to your root `bundle.md`:
+
+```yaml
+includes:
+  - bundle: git+https://github.com/kenotron-ms/engram-lite@main
+```
+
+### CLI tools (optional, for MEMORY.md management)
+
+```bash
+# One-off via uvx — no install
+uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
+uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite status
+
+# Or install permanently
+pip install git+https://github.com/kenotron-ms/engram-lite
+```
+
+### Development
+
+```bash
+git clone https://github.com/kenotron-ms/engram-lite.git
+cd engram-lite
+uv venv && uv pip install -e ".[dev]"
+.venv/bin/python -m pytest tests/
 ```
 
 ## Memory tools reference

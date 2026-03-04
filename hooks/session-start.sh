@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # engram-lite session-start hook
 # Reads MEMORY.md files and injects as <system-reminder>
+# Zero-install: uses uvx if engram-lite is not already in PATH.
 set -euo pipefail
 
-ENGRAM="${ENGRAM_BIN:-engram-lite}"
+REPO="git+https://github.com/kenotron-ms/engram-lite"
 USER_MEMORY="${ENGRAM_USER_MEM:-$HOME/.engram/MEMORY.md}"
 PROJECT_MEMORY="${ENGRAM_PROJECT_MEM:-.engram/MEMORY.md}"
+
+# Run engram-lite — prefers a locally installed binary, falls back to uvx.
+_engram() {
+    if command -v engram-lite &>/dev/null; then
+        engram-lite "$@"
+    else
+        uvx --from "$REPO" engram-lite "$@"
+    fi
+}
 
 printf '<system-reminder source="engram-lite">\n'
 
@@ -13,8 +23,7 @@ injected=0
 
 # User-scope MEMORY.md
 if [ -f "$USER_MEMORY" ]; then
-    # Refresh ## Now section silently
-    "$ENGRAM" refresh-now "$USER_MEMORY" 2>/dev/null || true
+    _engram refresh-now "$USER_MEMORY" 2>/dev/null || true
     printf '[MEMORY — user]\n'
     cat "$USER_MEMORY"
     printf '\n'
@@ -29,9 +38,9 @@ if [ -f "$PROJECT_MEMORY" ]; then
     injected=1
 fi
 
-# First run — no MEMORY.md files yet
+# First run — initialize memory store
 if [ "$injected" -eq 0 ]; then
-    "$ENGRAM" init 2>/dev/null || true
+    _engram init 2>/dev/null || true
     printf 'Memory initialized. Use memory_capture() to start building your knowledge store.\n'
 fi
 
