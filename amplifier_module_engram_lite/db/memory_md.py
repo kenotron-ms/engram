@@ -9,6 +9,7 @@ from pathlib import Path
 
 MAX_ENTRIES_PER_SECTION = 60
 MAX_NOW_ENTRIES = 10
+MAX_ENTRIES_TOTAL = 200
 
 IMPORTANCE_WEIGHTS = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2}
 
@@ -112,6 +113,41 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     return fm, body
 
 
+def _is_duplicate(content: str, entry_line: str) -> bool:
+    """Return True if an entry with the same text already exists in the file.
+
+    Compares the text portion only (ignores the ``[type]`` tag) so that
+    re-captures with a different type are also caught.
+    """
+    # entry_line looks like "- [type] some text here"
+    bracket_close = entry_line.find("]")
+    if bracket_close == -1:
+        return False
+    text_part = entry_line[bracket_close + 2 :]  # skip "] "
+    for line in content.splitlines():
+        if line.startswith("- [") and "]" in line:
+            bc = line.find("]")
+            existing_text = line[bc + 2 :]
+            if existing_text == text_part:
+                return True
+    return False
+
+
+def _trim_to_cap(content: str, cap: int = MAX_ENTRIES_TOTAL) -> str:
+    """Remove the oldest (bottom-most) entries if the total exceeds *cap*.
+
+    New entries are always inserted at the top of each section, so the
+    entries at the bottom of the file are the oldest ones.
+    """
+    lines = content.splitlines(keepends=True)
+    entry_indices = [i for i, ln in enumerate(lines) if ln.startswith("- [")]
+    if len(entry_indices) <= cap:
+        return content
+    # Drop oldest entries from the end of the list
+    to_remove = set(entry_indices[cap:])
+    return "".join(ln for i, ln in enumerate(lines) if i not in to_remove)
+
+
 def append_entry(
     scope: str,
     entry_type: str,
@@ -127,6 +163,10 @@ def append_entry(
     content = path.read_text()
     entry_line = f"- [{entry_type}] {text[:100]}"
 
+    # Dedup: skip if the same text already exists (any type tag)
+    if _is_duplicate(content, entry_line):
+        return entry_line
+
     # Remove the "no memories yet" placeholder if present
     content = re.sub(r"→ No memories yet.*\n", "", content)
     content = re.sub(r"→ No project memories yet.*\n", "", content)
@@ -141,6 +181,9 @@ def append_entry(
             content = content[:pos] + entry_line + "\n" + content[pos:]
     else:
         content += f"\n{section}\n{entry_line}\n"
+
+    # Enforce global cap — drop oldest entries from the bottom
+    content = _trim_to_cap(content)
 
     # Update frontmatter entry count
     entry_count = len(re.findall(r"^- \[", content, re.MULTILINE))

@@ -180,6 +180,72 @@ def memory_relate(
     }
 
 
+def _traverse_relations(
+    conn: sqlite3.Connection,
+    start_id: str,
+    depth: int,
+) -> list[dict]:
+    """BFS over memory_relations starting from a memory_id.
+
+    Returns a flat list of node dicts, each with ``related`` listing outgoing
+    and incoming edges.  The start node is always first (level=0).
+    """
+    visited: set[str] = set()
+    queue: list[tuple[str, int]] = [(start_id, 0)]
+    nodes: list[dict] = []
+
+    while queue:
+        mid, d = queue.pop(0)
+        if mid in visited:
+            continue
+        visited.add(mid)
+
+        mem = ms.get_memory(conn, mid, track_access=False)
+        if not mem:
+            continue
+
+        out_edges = conn.execute(
+            "SELECT to_id, relation_type, strength FROM memory_relations WHERE from_id = ?",
+            (mid,),
+        ).fetchall()
+        in_edges = conn.execute(
+            "SELECT from_id, relation_type, strength FROM memory_relations WHERE to_id = ?",
+            (mid,),
+        ).fetchall()
+
+        related = [
+            {"memory_id": r[0], "relation": r[1], "strength": r[2], "direction": "out"}
+            for r in out_edges
+        ] + [
+            {"memory_id": r[0], "relation": r[1], "strength": r[2], "direction": "in"}
+            for r in in_edges
+        ]
+
+        d_data = mem["data"]
+        nodes.append(
+            {
+                "id": mid,
+                "label": d_data.get("summary", mid)[:80],
+                "level": d,
+                "domain": mem["domain"],
+                "content_type": mem["content_type"],
+                "importance": mem["importance"],
+                "related": related,
+                "children": [],
+            }
+        )
+
+        if d < depth:
+            for r in out_edges:
+                if r[0] not in visited:
+                    queue.append((r[0], d + 1))
+            for r in in_edges:
+                if r[0] not in visited:
+                    queue.append((r[0], d + 1))
+
+    return nodes
+
+
 def memory_graph_explore(
     conn: sqlite3.Connection,
     query: str | None = None,
@@ -187,15 +253,20 @@ def memory_graph_explore(
     depth: int = 2,
 ) -> dict:
     """
-    Explore the hierarchical graph of memory domains.
+    Explore the knowledge graph — both the domain hierarchy and memory relations.
 
-    - If node_id: start from that specific node
-    - If query: find matching nodes by keyword
-    - Else: start from top-level root nodes
-    - Returns {nodes: [{id, label, level, summary, memory_count, children: [...]}]}
+    Modes:
+    - node_id is a **memory_id** → BFS over memory_relations (who relates to whom)
+    - node_id is a **graph_node_id** → domain hierarchy subtree (existing behaviour)
+    - query matching domain labels → domain hierarchy subtree
+    - query with no domain match → FTS search over memory content, then relations BFS
+    - no args → top-level domain nodes
+
+    Returns {nodes: [...]}.  Relation-traversal nodes carry a ``related`` list;
+    domain-hierarchy nodes carry ``children`` and ``memory_count``.
     """
 
-    def fetch_subtree(nid: str, remaining_depth: int) -> dict:
+    def fetch_domain_subtree(nid: str, remaining_depth: int) -> dict:
         row = conn.execute(
             "SELECT id, label, parent, data FROM graph_nodes WHERE id = ?", (nid,)
         ).fetchone()
@@ -215,17 +286,24 @@ def memory_graph_explore(
                 "SELECT id FROM graph_nodes WHERE parent = ?", (nid,)
             ).fetchall()
             for child in children:
-                child_node = fetch_subtree(child[0], remaining_depth - 1)
+                child_node = fetch_domain_subtree(child[0], remaining_depth - 1)
                 if child_node:
                     node["children"].append(child_node)
         return node
 
-    # Determine root node IDs
-    root_ids: list[str] = []
-
+    # ── node_id given ──────────────────────────────────────────────────────────
     if node_id:
-        root_ids = [node_id]
-    elif query:
+        # Is it a memory_id?
+        if ms.get_memory(conn, node_id, track_access=False):
+            return {"nodes": _traverse_relations(conn, node_id, depth)}
+        # Treat as a domain graph_node_id (original behaviour)
+        node = fetch_domain_subtree(node_id, depth)
+        return {"nodes": [node] if node else []}
+
+    # ── query given ────────────────────────────────────────────────────────────
+    if query:
+        # 1. Try domain label match first
+        domain_ids: list[str] = []
         seen: set[str] = set()
         for word in query.split():
             rows = conn.execute(
@@ -235,12 +313,38 @@ def memory_graph_explore(
             for r in rows:
                 if r[0] not in seen:
                     seen.add(r[0])
-                    root_ids.append(r[0])
-    else:
-        rows = conn.execute("SELECT id FROM graph_nodes WHERE parent IS NULL LIMIT 5").fetchall()
-        root_ids = [r[0] for r in rows]
+                    domain_ids.append(r[0])
 
-    nodes = [n for nid in root_ids if (n := fetch_subtree(nid, depth))]
+        if domain_ids:
+            nodes = [n for nid in domain_ids if (n := fetch_domain_subtree(nid, depth))]
+            return {"nodes": nodes}
+
+        # 2. No domain match — fall back to FTS over memory content + relations
+        try:
+            fts_rows = conn.execute(
+                "SELECT memory_id FROM memory_fts WHERE memory_fts MATCH ? LIMIT 5",
+                (query,),
+            ).fetchall()
+        except Exception:
+            fts_rows = []
+
+        if fts_rows:
+            all_nodes: list[dict] = []
+            seen_mids: set[str] = set()
+            for row in fts_rows:
+                mid = row[0]
+                if mid not in seen_mids:
+                    for node in _traverse_relations(conn, mid, min(depth, 1)):
+                        if node["id"] not in seen_mids:
+                            seen_mids.add(node["id"])
+                            all_nodes.append(node)
+            return {"nodes": all_nodes}
+
+        return {"nodes": []}
+
+    # ── no args — top-level domain nodes ──────────────────────────────────────
+    rows = conn.execute("SELECT id FROM graph_nodes WHERE parent IS NULL LIMIT 5").fetchall()
+    nodes = [n for r in rows if (n := fetch_domain_subtree(r[0], depth))]
     return {"nodes": nodes}
 
 

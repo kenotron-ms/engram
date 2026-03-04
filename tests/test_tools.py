@@ -131,10 +131,55 @@ class TestManage:
         rel = memory_relate(conn, r1["memory_id"], r2["memory_id"], "invalid-type")
         assert not rel["success"]
 
-    def test_graph_explore(self, seeded, conn):
+    def test_graph_explore_domain_query(self, seeded, conn):
+        """Original behaviour: query matching a domain label returns domain nodes."""
         g = memory_graph_explore(conn, query="professional", depth=2)
         assert "nodes" in g
         assert len(g["nodes"]) > 0
+
+    def test_graph_explore_by_memory_id_returns_related(self, conn, tmp_path):
+        """Given a memory_id as node_id, returns the memory and its related memories."""
+        r1 = memory_capture(conn, "PostgreSQL for concurrent writes", content_type="decision",
+                            domain="professional/arch", project_dir=tmp_path)
+        r2 = memory_capture(conn, "User prefers tabs over spaces", content_type="preference",
+                            domain="personal/prefs", project_dir=tmp_path)
+        memory_relate(conn, r1["memory_id"], r2["memory_id"], "relates-to")
+
+        g = memory_graph_explore(conn, node_id=r1["memory_id"])
+        assert "nodes" in g
+        assert len(g["nodes"]) >= 1
+        # Starting node must appear
+        node_ids = [n["id"] for n in g["nodes"]]
+        assert r1["memory_id"] in node_ids
+        # Related memory must appear too
+        assert r2["memory_id"] in node_ids
+
+    def test_graph_explore_memory_id_includes_relation_metadata(self, conn, tmp_path):
+        """Each node from relations traversal exposes 'related' edges."""
+        r1 = memory_capture(conn, "Use Redis for caching", content_type="decision",
+                            domain="professional/arch", project_dir=tmp_path)
+        r2 = memory_capture(conn, "Redis supports pub/sub", content_type="fact",
+                            domain="professional/arch", project_dir=tmp_path)
+        memory_relate(conn, r1["memory_id"], r2["memory_id"], "supports")
+
+        g = memory_graph_explore(conn, node_id=r1["memory_id"])
+        start_node = next(n for n in g["nodes"] if n["id"] == r1["memory_id"])
+        assert "related" in start_node
+        assert len(start_node["related"]) >= 1
+        rel = start_node["related"][0]
+        assert rel["memory_id"] == r2["memory_id"]
+        assert rel["relation"] == "supports"
+
+    def test_graph_explore_query_no_domain_match_falls_back_to_fts(self, seeded, conn):
+        """Query that doesn't match any domain label falls back to memory FTS search."""
+        # "typescript" is in memory content but NOT in any graph_nodes label
+        # (domain labels are personal/prefs, professional/arch, etc.)
+        g = memory_graph_explore(conn, query="typescript")
+        assert "nodes" in g
+        assert len(g["nodes"]) >= 1
+        # The TypeScript preference memory should surface
+        summaries = [n.get("label", "") for n in g["nodes"]]
+        assert any("typescript" in s.lower() or "TypeScript" in s for s in summaries)
 
     def test_stats_correct_counts(self, seeded, conn):
         s = memory_stats(conn)
