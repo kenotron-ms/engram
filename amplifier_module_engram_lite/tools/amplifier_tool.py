@@ -1,4 +1,4 @@
-"""Amplifier tool module — exposes all 9 memory tools via Amplifier Tool protocol."""
+"""Amplifier tool module — exposes all 10 memory tools via Amplifier Tool protocol."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
 
     tools = [
         MemoryCaptureTool(conn),
+        MemoryCaptureHotTool(conn, coordinator),
         MemoryRecallTool(conn),
         MemorySearchTool(conn),
         MemoryUpdateTool(conn),
@@ -451,3 +452,52 @@ class MemoryIndexTool(_BaseTool):
                 content=input.get("content"),
             ),
         )
+
+
+class MemoryCaptureHotTool:
+    """Hot surface writer — reads current MEMORY.md, merges new info via LLM, writes prose."""
+
+    def __init__(self, conn: Any, coordinator: Any) -> None:
+        self._conn = conn
+        self._coordinator = coordinator
+
+    @property
+    def name(self) -> str:
+        return "memory_capture_hot"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Update the MEMORY.md hot surface with new information. "
+            "Reads the current narrative, merges the new info using LLM assistance, "
+            "and writes back as flowing prose. Use whenever you capture something "
+            "worth persisting in the always-visible hot surface across sessions."
+        )
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "new_info": {
+                    "type": "string",
+                    "description": "New information to incorporate into the MEMORY.md narrative",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["user", "project", "local"],
+                    "default": "user",
+                },
+            },
+            "required": ["new_info"],
+        }
+
+    async def execute(self, input: dict[str, Any]) -> Any:
+        from amplifier_module_engram_lite.tools.hot import memory_capture_hot
+
+        result = await memory_capture_hot(
+            input["new_info"],
+            scope=input.get("scope", "user"),
+            coordinator=self._coordinator,
+        )
+        return _tool_result(True, result)

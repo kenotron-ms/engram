@@ -31,29 +31,18 @@ After the turn, silently capture anything worth retaining. For each thing worth 
 
 1. **Assess hot-surface fit** — does this belong in MEMORY.md? It does if it's a standing preference, active project context, critical constraint, or key habit — something you'd want visible at every future session start without a search.
 
-2. **If hot-surface: compose and write MEMORY.md first**
-
-   a. Read the current file:
-   ```
-   memory_index(action="read", scope="user")
-   ```
-
-   b. Reason about the full picture — what belongs in the narrative, what goes depth-map only, what can be dropped. Then compose the complete updated narrative.
-
-   c. Write it agentically using bash:
-   ```bash
-   cat > ~/.engram/MEMORY.md << 'EOF'
-   <your composed narrative here>
-   EOF
-   ```
-   *(For project scope, write to `.engram/MEMORY.md` in the project root instead.)*
+2. **If hot-surface: call `memory_capture_hot` first**
+```
+memory_capture_hot(new_info="<what changed>", scope="user")
+```
+The tool reads the current MEMORY.md, merges the new information using LLM assistance, and writes back the updated prose narrative. One call — no manual read/compose/write cycle needed.
 
 3. **Capture to Vector DB** (always, for everything worth retaining)
 ```
 memory_capture(content, content_type, domain, space, importance)
 ```
 
-MEMORY.md is written *before* the DB capture so the hot surface stays in sync with what you're about to archive. If a fact is DB-only, check whether its topic should appear in the depth map.
+MEMORY.md is updated *before* the DB capture so the hot surface stays in sync with what's being archived. If a fact is DB-only, check whether its topic should appear in the depth map.
 
 </protocol>
 
