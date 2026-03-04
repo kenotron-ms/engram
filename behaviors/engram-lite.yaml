@@ -19,3 +19,4 @@ tools:
 context:
   include:
     - engram-lite:context/memory-awareness.md
+    - engram-lite:context/memory-instructions.md

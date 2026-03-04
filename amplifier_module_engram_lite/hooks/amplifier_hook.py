@@ -43,13 +43,13 @@ class EngramLiteHook:
             name="engram-lite",
         )
         hooks.register(
-            "prompt:submit",
+            "provider:request",
             self.on_capture_reminder,
             priority=self.priority,
             name="engram-lite-capture",
         )
         hooks.register(
-            "prompt:submit",
+            "provider:request",
             self.on_prompt_submit,
             priority=self.priority + 1,
             name="engram-lite",
