@@ -174,13 +174,19 @@ def memory_stats(
 
 @mcp.tool()
 def memory_index(
-    action: Annotated[str, "Action: read|status|rebuild"] = "status",
+    action: Annotated[str, "Action: read|write|status|rebuild"] = "status",
     scope: Annotated[str, "Scope: user|project|local|all"] = "all",
+    content: Annotated[
+        str | None, "Full Markdown content to write (required for action='write')"
+    ] = None,
 ) -> dict:
-    """Read or check status of MEMORY.md hot-surface files."""
+    """Read, write, check status of, or rebuild MEMORY.md hot-surface files.
+
+    Use action='write' to update MEMORY.md with LLM-authored prose narrative content.
+    """
     from amplifier_module_engram_lite.tools.manage import memory_index as _index
 
-    return _index(_get_conn(), action=action, scope=scope)
+    return _index(_get_conn(), action=action, scope=scope, content=content)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
