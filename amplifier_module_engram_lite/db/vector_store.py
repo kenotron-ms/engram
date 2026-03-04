@@ -1,4 +1,4 @@
-"""Vector store — sentence-transformers embeddings + sqlite-vec KNN."""
+"""Vector store — fastembed (ONNX, no PyTorch) + sqlite-vec KNN."""
 
 from __future__ import annotations
 
@@ -9,24 +9,23 @@ from typing import Any
 
 # ── Embedding model (lazy-loaded singleton) ───────────────────────────────────
 
-MODEL_NAME = "all-MiniLM-L6-v2"  # 384 dims, ~80MB, fully local
-_model: Any = None  # SentenceTransformer, typed as Any to avoid hard import
+MODEL_NAME = "BAAI/bge-small-en-v1.5"  # 384 dims, 67MB, no PyTorch
+_model: Any = None
 
 
 def _get_model() -> Any:
     global _model
     if _model is None:
-        from sentence_transformers import (
-            SentenceTransformer,  # type: ignore[import-untyped]  # noqa: PLC0415
-        )
+        from fastembed import TextEmbedding  # type: ignore[import-untyped]
 
-        _model = SentenceTransformer(MODEL_NAME)
+        _model = TextEmbedding(model_name=MODEL_NAME)
     return _model
 
 
 def embed(text: str) -> list[float]:
-    """Encode text to a normalised 384-dim vector using all-MiniLM-L6-v2."""
-    return _get_model().encode(text, normalize_embeddings=True).tolist()
+    """Encode text to a normalised 384-dim vector. Fully local, no API needed."""
+    result = next(_get_model().embed([text]))
+    return result.tolist()
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:

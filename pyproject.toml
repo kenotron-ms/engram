@@ -23,7 +23,7 @@ dependencies = [
     # No amplifier-core here — it's a peer dep only needed for Amplifier integration.
     # Claude Code / uvx users install this package without amplifier-core.
     "sqlite-vec>=0.1.6",
-    "sentence-transformers>=3.0",  # default embedding backend — always required
+    "fastembed>=0.3.0",  # ONNX-based embeddings — no PyTorch, ~200MB install
     "httpx>=0.27.0",
     "pydantic>=2.0",
     "click>=8.0",
