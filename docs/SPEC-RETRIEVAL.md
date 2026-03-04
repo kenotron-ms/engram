@@ -199,13 +199,13 @@ System-1 combines two complementary retrieval strategies and fuses their results
 -- KNN vector search via sqlite-vec
 SELECT
     m.memory_id,
-    m.summary,
+    json_extract(m.data, '$.summary') AS summary,
     m.content_type,
     m.domain,
     m.importance,
     m.confidence,
     m.created_at,
-    m.accessed_at,
+    json_extract(m.data, '$.accessed_at') AS accessed_at,
     v.distance
 FROM memory_vectors AS v
 INNER JOIN memories AS m ON m.memory_id = v.memory_id
@@ -223,13 +223,13 @@ The `MATCH` syntax is sqlite-vec's KNN operator. The `distance` column contains 
 SELECT * FROM (
     SELECT
         m.memory_id,
-        m.summary,
+        json_extract(m.data, '$.summary') AS summary,
         m.content_type,
         m.domain,
         m.importance,
         m.confidence,
         m.created_at,
-        m.accessed_at,
+        json_extract(m.data, '$.accessed_at') AS accessed_at,
         (1.0 - v.distance) AS similarity
     FROM memory_vectors AS v
     INNER JOIN memories AS m ON m.memory_id = v.memory_id
@@ -271,13 +271,13 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(
 -- BM25 full-text search
 SELECT
     mf.memory_id,
-    m.summary,
+    json_extract(m.data, '$.summary') AS summary,
     m.content_type,
     m.domain,
     m.importance,
     m.confidence,
     m.created_at,
-    m.accessed_at,
+    json_extract(m.data, '$.accessed_at') AS accessed_at,
     rank AS bm25_score
 FROM memory_fts AS mf
 INNER JOIN memories AS m ON m.memory_id = mf.memory_id
@@ -456,14 +456,10 @@ ROOT: "project/backend"
 
 ```sql
 CREATE TABLE graph_nodes (
-    node_id       TEXT PRIMARY KEY,
+    id            TEXT PRIMARY KEY,
     label         TEXT NOT NULL,           -- human-readable name
-    level         INTEGER NOT NULL,        -- 0 = root, 1 = domain, 2 = sub-domain, ...
-    parent_id     TEXT REFERENCES graph_nodes(node_id),
-    summary       TEXT,                    -- LLM-generated summary of this subtree
-    memory_count  INTEGER DEFAULT 0,       -- cached count of memories in subtree
-    created_at    TEXT DEFAULT (datetime('now')),
-    updated_at    TEXT DEFAULT (datetime('now'))
+    parent        TEXT REFERENCES graph_nodes(id),
+    data          TEXT NOT NULL DEFAULT '{}' -- JSON: {level, summary, child_count, memory_count, updated_at}
 );
 
 CREATE TABLE graph_node_vectors (
@@ -536,9 +532,9 @@ async def system2_retrieve(
 SELECT
     gn.node_id,
     gn.label,
-    gn.level,
-    gn.summary,
-    gn.memory_count,
+    json_extract(gn.data, '$.level') AS level,
+    json_extract(gn.data, '$.summary') AS summary,
+    json_extract(gn.data, '$.memory_count') AS memory_count,
     (1.0 - gnv.distance) AS similarity
 FROM graph_node_vectors AS gnv
 INNER JOIN graph_nodes AS gn ON gn.node_id = gnv.node_id
@@ -559,33 +555,33 @@ ORDER BY gnv.distance ASC;
 -- including parent chain and sibling nodes
 WITH RECURSIVE subtree AS (
     -- Base case: the matched nodes
-    SELECT node_id, parent_id, label, level, 0 AS depth
+    SELECT node_id, parent_id, label, json_extract(data, '$.level') AS level, 0 AS depth
     FROM graph_nodes
     WHERE node_id IN (:matched_node_ids)
 
     UNION ALL
 
     -- Recurse downward: children of current nodes
-    SELECT gn.node_id, gn.parent_id, gn.label, gn.level, st.depth + 1
+    SELECT gn.node_id, gn.parent_id, gn.label, json_extract(gn.data, '$.level') AS level, st.depth + 1
     FROM graph_nodes AS gn
     INNER JOIN subtree AS st ON gn.parent_id = st.node_id
     WHERE st.depth < :max_depth  -- limit traversal depth
 ),
 -- Also traverse upward to include parent chain
 parent_chain AS (
-    SELECT node_id, parent_id, label, level
+    SELECT node_id, parent_id, label, json_extract(data, '$.level') AS level
     FROM graph_nodes
     WHERE node_id IN (:matched_node_ids)
 
     UNION ALL
 
-    SELECT gn.node_id, gn.parent_id, gn.label, gn.level
+    SELECT gn.node_id, gn.parent_id, gn.label, json_extract(gn.data, '$.level') AS level
     FROM graph_nodes AS gn
     INNER JOIN parent_chain AS pc ON gn.node_id = pc.parent_id
 ),
 -- Include siblings of matched nodes
 siblings AS (
-    SELECT gn.node_id, gn.parent_id, gn.label, gn.level
+    SELECT gn.node_id, gn.parent_id, gn.label, json_extract(gn.data, '$.level') AS level
     FROM graph_nodes AS gn
     WHERE gn.parent_id IN (
         SELECT parent_id FROM graph_nodes
@@ -639,7 +635,7 @@ def compute_graph_score(memory) -> float:
 
     # Recency decay: exp(-days / half_life)
     now = datetime.now(timezone.utc)
-    last_access = memory.accessed_at or memory.created_at
+    last_access = memory.data.get("accessed_at") or memory.created_at
     days_since = (now - last_access).total_seconds() / 86400.0
     recency = math.exp(-days_since / RECENCY_HALF_LIFE_DAYS)
 
@@ -764,7 +760,7 @@ def final_rerank(
         query_match = cosine_similarity(query_embedding, result.embedding)
         confidence = result.confidence
         importance = IMPORTANCE_WEIGHT.get(result.importance, 0.5)
-        recency = compute_recency_decay(result.accessed_at)
+        recency = compute_recency_decay(result.data.get("accessed_at"))
 
         result.final_score = (
             0.40 * query_match +
@@ -1068,13 +1064,13 @@ At the beginning of each agent session, engram-lite pre-loads a context summary.
 -- Session-start pre-load: critical + high importance + recent
 SELECT
     m.memory_id,
-    m.summary,
+    json_extract(m.data, '$.summary') AS summary,
     m.content_type,
     m.domain,
     m.importance,
     m.confidence,
     m.created_at,
-    m.accessed_at
+    json_extract(m.data, '$.accessed_at') AS accessed_at
 FROM memories AS m
 WHERE m.deleted_at IS NULL
     AND m.confidence >= 0.5
@@ -1086,7 +1082,7 @@ WHERE m.deleted_at IS NULL
             :space IS NULL OR m.space = :space
         ))
         -- Load recently accessed memories
-        OR m.accessed_at >= datetime('now', '-1 day')
+        OR json_extract(m.data, '$.accessed_at') >= datetime('now', '-1 day')
     )
 ORDER BY
     CASE m.importance
@@ -1095,7 +1091,7 @@ ORDER BY
         WHEN 'medium' THEN 3
         WHEN 'low' THEN 4
     END ASC,
-    m.accessed_at DESC
+    json_extract(m.data, '$.accessed_at') DESC
 LIMIT :max_preload;  -- default: 20
 ```
 
@@ -1226,28 +1222,27 @@ ORDER BY
 
 ## 14. SQL Reference
 
+> **Note on JSON fields**: Fields stored in `data` JSON are accessed via `json_extract(data, '$.field')`. SQLite's JSON functions are implemented in C and are fast for scalar extraction (~1–2μs per call). Hot query paths only filter on real indexed columns; `json_extract` is used only in SELECT lists and for rarely-filtered fields. This is intentional — see SPEC-STORAGE.md §3.0 for the design philosophy.
+
 ### Complete Table Schema
 
 ```sql
--- Core memories table (hot tier)
+-- Core memories table (JSON-first schema — see SPEC-STORAGE.md §3.0)
 CREATE TABLE memories (
-    memory_id     TEXT PRIMARY KEY,
-    summary       TEXT NOT NULL,
+    id            TEXT PRIMARY KEY,
+    space         TEXT NOT NULL CHECK(space IN ('user', 'project')),
+    domain        TEXT,
     content_type  TEXT NOT NULL CHECK(content_type IN
                     ('fact','preference','event','skill','entity','relationship','decision')),
-    domain        TEXT,
-    space         TEXT NOT NULL CHECK(space IN ('user', 'project')),
     importance    TEXT NOT NULL DEFAULT 'medium' CHECK(importance IN
                     ('critical','high','medium','low')),
     confidence    FLOAT NOT NULL DEFAULT 0.8 CHECK(confidence >= 0.0 AND confidence <= 1.0),
-    tags          TEXT,        -- JSON array: '["tag1", "tag2"]'
-    keywords      TEXT,        -- space-separated keywords for FTS
-    expires_at    TEXT,        -- ISO 8601 datetime, NULL = permanent
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    accessed_at   TEXT NOT NULL DEFAULT (datetime('now')),
-    deleted_at    TEXT,        -- soft delete timestamp
-    deleted_reason TEXT        -- why it was deleted
+    superseded_by TEXT REFERENCES memories(id),
+    data          TEXT NOT NULL DEFAULT '{}'
+    -- JSON blob: content, summary, detail, tags, keywords,
+    -- source_session, project, modified_at, accessed_at, access_count,
+    -- expires_at, visibility, memory_md_entry
 );
 
 -- Vector embeddings (sqlite-vec virtual table)
@@ -1292,8 +1287,8 @@ CREATE INDEX idx_memories_domain ON memories(domain);
 CREATE INDEX idx_memories_space ON memories(space);
 CREATE INDEX idx_memories_importance ON memories(importance);
 CREATE INDEX idx_memories_content_type ON memories(content_type);
-CREATE INDEX idx_memories_accessed_at ON memories(accessed_at);
-CREATE INDEX idx_memories_deleted_at ON memories(deleted_at);
+-- NOTE: accessed_at is now in the data JSON blob; no direct index.
+-- For hot-path filtering, use real indexed columns (importance, domain, space).
 CREATE INDEX idx_relations_from ON memory_relations(from_id);
 CREATE INDEX idx_relations_to ON memory_relations(to_id);
 CREATE INDEX idx_relations_type ON memory_relations(relation_type);

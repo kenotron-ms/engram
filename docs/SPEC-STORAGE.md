@@ -259,18 +259,56 @@ The user-scope `~/.engram/` directory is outside any repo and never committed.
 
 ## 3. Full Annotated Schema
 
-### 3.1 Core Memory Table
+### 3.0 Design Philosophy: JSON-First Schema
+
+The schema follows a strict rule: **real columns exist only to serve indexes.** Every field that is never used in a `WHERE` clause, `ORDER BY`, or `JOIN` belongs in the `data` JSON blob.
+
+**Why this matters:**
+
+| Concern | How JSON-first addresses it |
+|---------|-----------------------------|
+| **No migrations for new attributes** | Adding a field to `data` is a code change, not a schema change. No `ALTER TABLE`, no migration scripts, no version coordination. |
+| **Stable indexed surface** | Only 8 columns on `memories` are real — the surface area that can break is small and changes rarely. |
+| **SQLite JSON is native and fast** | `json_extract()`, `json_set()`, `json_valid()`, `json_each()` are built-in since SQLite 3.38. No extension needed. |
+| **DB-enforced integrity** | `CHECK (json_valid(data))` rejects malformed JSON at the database level — no bad data even if application code has bugs. |
+
+**The promotion rule:** A field graduates from `data` JSON to a real column **only** when it needs an index — i.e., it appears in a `WHERE`, `ORDER BY`, or `JOIN` on a hot query path. If you're not filtering or sorting by it, it stays in JSON.
+
+**Applying the rule to `memories`:**
+
+| Real column | Why it's indexed |
+|-------------|-----------------|
+| `id` | Primary key — every lookup needs it |
+| `space` | Every query filters by space (`user`/`project`/`local`) |
+| `domain` | Prefix-filtered (`LIKE 'professional/%'`) for taxonomy navigation |
+| `content_type` | Frequently filtered (`WHERE content_type = 'event'`) |
+| `importance` | Scoring formula + filter (`WHERE importance = 'critical'`) |
+| `confidence` | Threshold filter (`WHERE confidence > 0.30`) |
+| `created_at` | `ORDER BY created_at DESC` for recency ranking |
+| `superseded_by` | Soft-delete check (`WHERE superseded_by IS NULL` = active) |
+
+Everything else — `content`, `summary`, `detail`, `tags`, `keywords`, timestamps like `modified_at` and `accessed_at`, `access_count`, `visibility`, `source_session`, `project`, `expires_at`, `memory_md_entry` — lives in `data`.
+
+### 3.1 Core Memory Table (`memories`)
 
 ```sql
 CREATE TABLE memories (
+    -- ── Real columns: these exist because they are indexed ──
+
     -- Primary key: UUID v4, generated client-side.
     -- UUIDs avoid coordination between user/project DBs and prevent
     -- collisions if databases are ever merged.
     id              TEXT PRIMARY KEY,
 
-    -- The raw captured content, exactly as extracted from conversation.
-    -- Never truncated. This is the source of truth.
-    content         TEXT NOT NULL,
+    -- Which database this memory belongs in. Every query filters on this.
+    -- Denormalized so a memory carries its space identity even if exported.
+    space           TEXT NOT NULL DEFAULT 'user'
+        CHECK (space IN ('user', 'project', 'local')),
+
+    -- Hierarchical domain path from the taxonomy.
+    -- e.g. 'professional/architecture', 'personal/preferences'
+    -- Prefix-filtered with LIKE 'professional/%' for subtree queries.
+    domain          TEXT NOT NULL,
 
     -- Categorical type. Drives display, retrieval weighting, and
     -- auto-tagging behavior. Constrained to known set via CHECK.
@@ -280,93 +318,113 @@ CREATE TABLE memories (
             'entity', 'relationship', 'decision'
         )),
 
-    -- Which database this memory belongs in. Denormalized here so
-    -- a memory carries its space identity even if exported.
-    space           TEXT NOT NULL DEFAULT 'user'
-        CHECK (space IN ('user', 'project')),
-
-    -- Hierarchical domain path from the taxonomy.
-    -- e.g. 'professional/architecture', 'personal/preferences'
-    -- Slash-separated. Always at least one level deep.
-    domain          TEXT NOT NULL,
-
-    -- HOT TIER: 1-2 sentence inductive summary.
-    -- Written conclusion-first: "User prefers X because Y."
-    -- This is what gets loaded into agent context by default.
-    -- NULL only during initial capture before summarization completes.
-    summary         TEXT,
-
-    -- COLD TIER: Full elaboration, examples, nuance.
-    -- Only loaded on explicit expansion or deep-dive queries.
-    -- May contain markdown, code blocks, structured data.
-    detail          TEXT,
-
-    -- Epistemic confidence. See Section 7 for update formulas.
-    confidence      REAL NOT NULL DEFAULT 0.7
-        CHECK (confidence >= 0.0 AND confidence <= 1.0),
-
     -- Retrieval priority. 'critical' memories are always loaded
     -- into the agent's hot context at session start.
     importance      TEXT NOT NULL DEFAULT 'medium'
         CHECK (importance IN ('critical', 'high', 'medium', 'low')),
 
-    -- Session ID that created this memory. Used for provenance
-    -- tracking and confidence boosting (cross-session confirmation).
-    source_session  TEXT,
+    -- Epistemic confidence [0.0, 1.0]. See Section 7 for update formulas.
+    -- Used in threshold filters (WHERE confidence > 0.30) and scoring.
+    confidence      REAL NOT NULL DEFAULT 0.7
+        CHECK (confidence >= 0.0 AND confidence <= 1.0),
 
-    -- Project name, if applicable. Used when a project-scoped memory
-    -- is stored in the user DB (no project DB available).
-    project         TEXT,
-
-    -- Timestamps: all ISO 8601 with timezone.
-    -- created_at: immutable after insert.
-    -- modified_at: updated on any content/metadata change.
-    -- accessed_at: updated on every retrieval (read).
+    -- Immutable creation timestamp. ISO 8601 with timezone.
+    -- Indexed for ORDER BY recency queries.
     created_at      TEXT NOT NULL,
-    modified_at     TEXT NOT NULL,
-    accessed_at     TEXT,
 
-    -- Retrieval counter. Incremented on every recall hit.
-    -- Used for importance inference and decay resistance.
-    access_count    INTEGER NOT NULL DEFAULT 0,
-
-    -- Temporal validity. NULL = permanent (no expiry).
-    -- See Section 8 for TTL patterns per content type.
-    expires_at      TEXT,
-
-    -- Soft supersession pointer. When a memory is updated with
-    -- substantially new information, the old version is kept but
-    -- marked as superseded. The new memory's ID goes here.
+    -- Soft supersession pointer. When a memory is replaced with
+    -- substantially new information, the new memory's ID goes here.
+    -- NULL = active (not superseded). Non-NULL = archived.
+    -- Partial index covers only active rows for fast filtering.
     superseded_by   TEXT REFERENCES memories(id),
 
-    -- Access control. 'private' = user only. 'project' = visible
-    -- to project collaborators. 'public' = exportable.
-    visibility      TEXT NOT NULL DEFAULT 'private'
-        CHECK (visibility IN ('private', 'project', 'public'))
+    -- ── JSON blob: everything else lives here ──
+
+    -- Contains: content, summary, detail, tags, keywords,
+    -- source_session, project, modified_at, accessed_at,
+    -- access_count, expires_at, visibility, memory_md_entry.
+    -- DB enforces valid JSON; application owns the inner schema.
+    data            TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
 );
 
--- Indexes for common query patterns
-CREATE INDEX idx_memories_space ON memories(space);
-CREATE INDEX idx_memories_domain ON memories(domain);
-CREATE INDEX idx_memories_content_type ON memories(content_type);
-CREATE INDEX idx_memories_importance ON memories(importance);
-CREATE INDEX idx_memories_project ON memories(project);
-CREATE INDEX idx_memories_confidence ON memories(confidence);
-CREATE INDEX idx_memories_created_at ON memories(created_at);
-CREATE INDEX idx_memories_expires_at ON memories(expires_at)
-    WHERE expires_at IS NOT NULL;
-CREATE INDEX idx_memories_superseded ON memories(superseded_by)
-    WHERE superseded_by IS NOT NULL;
+-- ── Indexes: one per real column, tuned for actual query patterns ──
+
+-- Space filter (every recall query)
+CREATE INDEX idx_mem_space ON memories(space);
+
+-- Domain prefix search (LIKE 'professional/%')
+CREATE INDEX idx_mem_domain ON memories(domain);
+
+-- Composite: space + domain together (most common combined filter)
+CREATE INDEX idx_mem_space_domain ON memories(space, domain);
+
+-- Content type filter
+CREATE INDEX idx_mem_content_type ON memories(content_type);
+
+-- Importance filter and sort (critical-first loading)
+CREATE INDEX idx_mem_importance ON memories(importance);
+
+-- Confidence threshold filter
+CREATE INDEX idx_mem_confidence ON memories(confidence);
+
+-- Recency ordering (DESC so newest-first is the natural scan)
+CREATE INDEX idx_mem_created_at ON memories(created_at DESC);
+
+-- Active memories only (partial index — only rows where superseded_by IS NULL)
+-- This is the most-used filter: almost every query excludes superseded memories.
+CREATE INDEX idx_mem_active ON memories(id)
+    WHERE superseded_by IS NULL;
+
+-- Composite: space + content_type (## Now refresh query pattern)
+CREATE INDEX idx_mem_space_type ON memories(space, content_type);
 ```
 
-**Design rationale:**
+**`data` JSON schema:**
 
-- `TEXT PRIMARY KEY` over `INTEGER PRIMARY KEY`: UUIDs enable cross-database operations without key collisions. The slight index overhead is negligible at expected scale (< 100K memories per DB).
-- `content` vs `summary` vs `detail`: Three-tier information model. `summary` is the hot path — fast to scan, fits in agent context windows. `content` is the raw capture. `detail` is the expanded cold-tier explanation.
-- `CHECK` constraints: SQLite enforces these on insert/update. Catches application bugs at the database level.
-- Partial indexes on `expires_at` and `superseded_by`: Only index the non-NULL rows, which are the minority. Saves space and write overhead.
+Every field in `data` is documented below. Only `content` is required; all others are optional with sensible defaults.
 
-### 3.2 Tag Index
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `content` | `string` | **Yes** | — | Raw captured content, exactly as extracted from conversation. Never truncated. Source of truth. |
+| `summary` | `string` | No | `""` | 1–2 sentence inductive summary (conclusion-first). This is the hot-tier text loaded into agent context. |
+| `detail` | `string` | No | `null` | Full elaboration, examples, nuance. Cold tier — only loaded on explicit expansion. May contain markdown. |
+| `tags` | `string[]` | No | `[]` | Categorical labels. Lowercase, hyphenated, max 64 chars each. Duplicated in `memory_tags` table for indexed lookup. |
+| `keywords` | `string[]` | No | `[]` | Search vocabulary: synonyms, acronyms, alternate spellings. Fed into FTS5 at insert time. |
+| `source_session` | `string` | No | `null` | Session ID that created this memory. Used for provenance and cross-session confidence boosting. |
+| `project` | `string` | No | `null` | Project name, if applicable. Used when a project-scoped memory is stored in the user DB. |
+| `modified_at` | `string` | No | `null` | ISO 8601. Updated on any content/metadata change. |
+| `accessed_at` | `string` | No | `null` | ISO 8601. Updated on every retrieval (read). |
+| `access_count` | `integer` | No | `0` | Retrieval counter. Incremented on every recall hit. Drives importance inference and decay resistance. |
+| `expires_at` | `string` | No | `null` | ISO 8601. Temporal validity. `null` = permanent. See Section 8 for TTL patterns. |
+| `visibility` | `string` | No | `"private"` | Access control: `"private"`, `"project"`, or `"public"`. |
+| `memory_md_entry` | `string` | No | `null` | The 1-line MEMORY.md representation, e.g. `"- [arch] SQLite-vec + dual-route retrieval"`. |
+
+**Example `data` blob:**
+
+```json
+{
+  "content":        "User strongly prefers SQLite over Postgres for local-first apps",
+  "summary":        "Prefers SQLite for local-first apps — values zero-infrastructure and file portability over client-server features.",
+  "detail":         "In discussion about engram-lite storage, user explained that SQLite's single-file model means the DB travels with the project. No daemon, no port, no auth. WAL mode handles the single-writer concurrency model of AI agent access. Chose SQLite-vec over pgvector specifically to avoid a running server.",
+  "tags":           ["architecture", "sqlite", "decision"],
+  "keywords":       ["SQLite", "sqlite3", "sql", "relational database", "local-first"],
+  "source_session": "session-abc123",
+  "project":        "engram-lite",
+  "modified_at":    "2026-03-03T17:44:38Z",
+  "accessed_at":    "2026-03-03T18:00:00Z",
+  "access_count":   5,
+  "expires_at":     null,
+  "visibility":     "private",
+  "memory_md_entry": "- [arch] SQLite-vec + dual-route retrieval"
+}
+```
+
+### 3.2 Tag Index (`memory_tags`)
+
+Tags live in **two places** by design: inside `data.tags` (for completeness when reading a single memory) and as rows in `memory_tags` (for query performance). This is intentional denormalization.
+
+**Why both?** Efficient `WHERE tag = ?` queries and multi-tag intersection queries require indexed rows. Scanning a JSON array with `json_each(data, '$.tags')` on every row in the table is O(N) and cannot use an index. The `memory_tags` table provides O(log N) lookup via its indexes. Both exist — `data.tags` for read convenience, `memory_tags` for write-once indexed lookup.
 
 ```sql
 -- Tags are categorical labels attached to memories.
@@ -387,8 +445,11 @@ CREATE INDEX idx_tags_tag ON memory_tags(tag);
 
 - Composite primary key `(memory_id, tag)` prevents duplicate tags on the same memory and serves as the forward-lookup index.
 - `ON DELETE CASCADE`: when a memory is deleted, its tags are automatically cleaned up.
+- Multi-tag intersection: `SELECT memory_id FROM memory_tags WHERE tag IN ('architecture', 'decision') GROUP BY memory_id HAVING COUNT(*) = 2`.
 
-### 3.3 Full-Text Search (FTS5)
+### 3.3 Full-Text Search (`memory_fts`)
+
+FTS5 is a virtual table — it manages its own storage and indexes internally. The columns here are **extracted from `data` JSON** at insert time: `data.content` → `content`, `data.summary` → `summary`, `data.keywords` joined with spaces → `keywords`.
 
 ```sql
 -- FTS5 virtual table for BM25 keyword search.
@@ -405,12 +466,12 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(
 
 **Key details:**
 
-| Column | Indexed? | Purpose |
-|--------|----------|---------|
-| `memory_id` | No (UNINDEXED) | Join back to `memories` table |
-| `content` | Yes | Full-text search over raw content |
-| `summary` | Yes | Full-text search over summaries |
-| `keywords` | Yes | Boosted keyword vocabulary (synonyms, acronyms, plurals) |
+| Column | Indexed? | Source in `data` JSON | Purpose |
+|--------|----------|----------------------|---------|
+| `memory_id` | No (UNINDEXED) | — (the row's `id`) | Join back to `memories` table |
+| `content` | Yes | `data.content` | Full-text search over raw content |
+| `summary` | Yes | `data.summary` | Full-text search over summaries |
+| `keywords` | Yes | `' '.join(data.keywords)` | Boosted keyword vocabulary (synonyms, acronyms) |
 
 **FTS5 BM25 weighting:**
 
@@ -427,44 +488,25 @@ The weight ordering matches the column ordering in the CREATE statement: `memory
 **FTS5 synchronization:** The FTS5 table must be manually kept in sync with the `memories` table. On every insert/update/delete to `memories`:
 
 ```python
-def sync_fts(conn, memory_id: str, content: str, summary: str, keywords: str):
-    """Insert or replace the FTS5 row for a memory."""
+def sync_fts(conn, memory_id: str, data: dict):
+    """Insert or replace the FTS5 row for a memory.
+    
+    Extracts content, summary, and keywords from the data JSON blob.
+    """
     conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
     conn.execute(
         "INSERT INTO memory_fts (memory_id, content, summary, keywords) VALUES (?, ?, ?, ?)",
-        (memory_id, content, summary or "", keywords)
+        (memory_id, data["content"], data.get("summary", ""),
+         " ".join(data.get("keywords", [])))
     )
 
 def delete_fts(conn, memory_id: str):
     conn.execute("DELETE FROM memory_fts WHERE memory_id = ?", (memory_id,))
 ```
 
-### 3.4 Keyword Weights
+### 3.4 Knowledge Graph Edges (`memory_relations`)
 
-```sql
--- Explicit keyword-weight pairs for hybrid search tuning.
--- Separate from FTS5 so we can store per-keyword weights
--- and use them in re-ranking without re-indexing.
-CREATE TABLE memory_keywords (
-    memory_id   TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-    keyword     TEXT NOT NULL,
-    weight      REAL NOT NULL DEFAULT 1.0
-        CHECK (weight > 0.0 AND weight <= 5.0),
-    PRIMARY KEY (memory_id, keyword)
-);
-CREATE INDEX idx_keywords_keyword ON memory_keywords(keyword);
-```
-
-**Weight scale:**
-
-| Weight | Meaning | Example |
-|--------|---------|---------|
-| 1.0 | Standard relevance | General related term |
-| 2.0 | Strong relevance | Synonym or core concept |
-| 3.0 | Primary identifier | The exact subject of the memory |
-| 4.0-5.0 | Critical match | Unique proper noun, project name |
-
-### 3.5 Knowledge Graph Relations
+A clean relational table — no JSON needed. These are typed, directed edges between memories with a strength float. Pure association data where every column participates in constraints, keys, or indexed lookups.
 
 ```sql
 -- Explicit typed edges between memories.
@@ -481,16 +523,11 @@ CREATE TABLE memory_relations (
     -- Used in graph traversal to prune weak connections.
     strength      REAL NOT NULL DEFAULT 0.5
         CHECK (strength >= 0.0 AND strength <= 1.0),
-    created_at    TEXT NOT NULL,
-    -- Who created this edge. 'auto' = system inferred,
-    -- 'user' = explicitly stated, 'ai' = LLM suggested.
-    created_by    TEXT
-        CHECK (created_by IN ('auto', 'user', 'ai')),
     PRIMARY KEY (from_id, to_id, relation_type)
 );
 
+-- Reverse lookup: find all edges pointing TO a memory.
 CREATE INDEX idx_relations_to ON memory_relations(to_id);
-CREATE INDEX idx_relations_type ON memory_relations(relation_type);
 ```
 
 **Relation semantics:**
@@ -509,34 +546,39 @@ CREATE INDEX idx_relations_type ON memory_relations(relation_type);
 
 **Symmetric relations:** For `relates-to` and `contradicts`, the application layer inserts **both directions** `(A→B)` and `(B→A)` to simplify queries (no need for `OR` clauses on from/to).
 
-### 3.6 Hierarchical Graph Nodes
+### 3.5 Hierarchical Graph Nodes (`graph_nodes`)
+
+Same JSON-first pattern as `memories`. Real columns serve indexes and foreign keys; everything else is in `data`.
+
+**Real columns:** `id` (PK), `label` (UNIQUE — path-based lookup), `parent` (FK — self-referential tree traversal).
 
 ```sql
 -- Hierarchical taxonomy nodes (Mnemis System-2 inspired).
 -- Organizes memories into a navigable tree structure.
 -- Each node can hold an LLM-generated summary of its subtree.
 CREATE TABLE graph_nodes (
+    -- ── Real columns: PK, unique lookup, FK tree traversal ──
     id          TEXT PRIMARY KEY,    -- UUID v4
-    -- Unique path label. Slash-separated hierarchy.
-    -- e.g. 'professional/architecture/distributed-systems'
-    label       TEXT NOT NULL UNIQUE,
-    -- Depth level: 0=root, 1=domain, 2=subdomain, 3=topic, 4=concept
-    level       INTEGER NOT NULL
-        CHECK (level >= 0 AND level <= 4),
-    -- Parent pointer. NULL only for level-0 root nodes.
-    parent_id   TEXT REFERENCES graph_nodes(id),
-    -- LLM-generated summary of all memories in this subtree.
-    -- Regenerated periodically as memories are added/removed.
-    summary     TEXT,
-    -- Denormalized counts for fast tree rendering.
-    child_count  INTEGER NOT NULL DEFAULT 0,
-    memory_count INTEGER NOT NULL DEFAULT 0,
-    updated_at  TEXT NOT NULL
+    label       TEXT NOT NULL UNIQUE, -- e.g. 'professional/architecture/distributed-systems'
+    parent      TEXT REFERENCES graph_nodes(id),  -- NULL only for root nodes
+
+    -- ── JSON blob: node metadata ──
+    data        TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
 );
 
-CREATE INDEX idx_graph_nodes_parent ON graph_nodes(parent_id);
-CREATE INDEX idx_graph_nodes_level ON graph_nodes(level);
+CREATE INDEX idx_graph_nodes_parent ON graph_nodes(parent);
 ```
+
+**`data` JSON schema for `graph_nodes`:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `level` | `integer` | No | `0` | Depth: 0=root, 1=domain, 2=subdomain, 3=topic, 4=concept |
+| `summary` | `string` | No | `null` | LLM-generated summary of all memories in this subtree. Regenerated periodically. |
+| `child_count` | `integer` | No | `0` | Denormalized count for fast tree rendering |
+| `memory_count` | `integer` | No | `0` | Denormalized count of memories attached to this node |
+| `updated_at` | `string` | No | `null` | ISO 8601. Last time this node's metadata was refreshed. |
 
 **Level semantics:**
 
@@ -548,22 +590,24 @@ CREATE INDEX idx_graph_nodes_level ON graph_nodes(level);
 | 3 | Topic | `professional/architecture/distributed-systems/consensus` | Concrete topic |
 | 4 | Concept | `professional/architecture/distributed-systems/consensus/raft` | Individual concept |
 
-### 3.7 Memory-to-Graph-Node Membership
+### 3.6 Memory-to-Graph-Node Membership (`memory_graph_nodes`)
+
+Pure association table. No JSON needed — every column is a key or foreign key. A memory can belong to multiple nodes (e.g., a decision about microservices architecture that also applies to a specific project).
 
 ```sql
--- Junction table: which memories belong to which graph nodes.
--- A memory can belong to multiple nodes (e.g. a decision about
--- microservices architecture that also applies to a specific project).
 CREATE TABLE memory_graph_nodes (
     memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
     node_id   TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
     PRIMARY KEY (memory_id, node_id)
 );
 
+-- Reverse lookup: find all memories in a given graph node.
 CREATE INDEX idx_mgn_node ON memory_graph_nodes(node_id);
 ```
 
-### 3.8 Vector Index (sqlite-vec)
+### 3.7 Vector Index (`memory_vectors`)
+
+sqlite-vec `vec0` virtual table. This is a virtual table with its own storage engine — no JSON pattern applies here.
 
 ```sql
 -- sqlite-vec virtual table for KNN similarity search.
@@ -628,29 +672,336 @@ ORDER BY distance;
 - On macOS (ARM): `pip install sqlite-vec` provides a pre-built wheel.
 - On Linux: the wheel is available for x86_64 and aarch64.
 
-### 3.9 Capture Provenance Log
+### 3.8 Capture Audit Log (`capture_log`)
+
+Same JSON-first pattern. Real columns serve the FK lookup and ordering index; provenance metadata lives in `data`.
+
+**Real columns:** `id` (PK), `memory_id` (nullable FK — the capture might fail before a memory is created), `captured_at` (ordering).
 
 ```sql
 -- Audit trail for memory captures.
 -- Records when, why, and in what context each memory was created.
 CREATE TABLE capture_log (
-    id          TEXT PRIMARY KEY,     -- UUID v4
-    memory_id   TEXT REFERENCES memories(id),
-    session_id  TEXT,                 -- agent session that triggered capture
-    captured_at TEXT NOT NULL,        -- ISO 8601
-    -- What triggered the capture:
-    --   'auto'     = agent auto-detected memorable content
-    --   'explicit' = user said "remember this"
-    --   'update'   = existing memory was updated/refined
-    trigger     TEXT
-        CHECK (trigger IN ('auto', 'explicit', 'update')),
-    -- Brief context snippet (max ~200 chars) showing what
-    -- conversation context led to the capture.
-    raw_context TEXT
+    -- ── Real columns: PK, FK lookup, ordering ──
+    id          TEXT PRIMARY KEY,        -- UUID v4
+    memory_id   TEXT REFERENCES memories(id),  -- nullable: capture may pre-date memory
+    captured_at TEXT NOT NULL,           -- ISO 8601, indexed for chronological queries
+
+    -- ── JSON blob: capture provenance ──
+    data        TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
 );
 
 CREATE INDEX idx_capture_log_memory ON capture_log(memory_id);
-CREATE INDEX idx_capture_log_session ON capture_log(session_id);
+CREATE INDEX idx_capture_log_at ON capture_log(captured_at DESC);
+```
+
+**`data` JSON schema for `capture_log`:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `trigger` | `string` | No | `"auto"` | What triggered capture: `"auto"` (agent-detected), `"explicit"` (user said "remember this"), `"update"` (existing memory refined), `"prune"` (MEMORY.md pruning event) |
+| `session_id` | `string` | No | `null` | Agent session that triggered the capture |
+| `raw_context` | `string` | No | `null` | Brief context snippet (~200 chars) showing what conversation led to capture |
+| `changes` | `object` | No | `null` | For updates: `{"field": "confidence", "old": 0.7, "new": 0.85}` — what changed and why |
+
+### 3.9 Python `MemoryRecord` Dataclass
+
+The Python application layer mirrors the JSON-first schema with a single dataclass. Real columns are direct attributes; everything else is accessed via `data` dict with `@property` accessors for type safety and defaults.
+
+```python
+from __future__ import annotations
+import json
+import sqlite3
+from dataclasses import dataclass, field
+
+
+@dataclass
+class MemoryRecord:
+    """In-memory representation of a memories row.
+
+    Real columns are direct attributes (set from the DB row).
+    Everything else lives in self.data (parsed once from JSON on load).
+    """
+
+    # ── Real columns (from DB row directly) ──
+    id: str
+    space: str
+    domain: str
+    content_type: str
+    importance: str
+    confidence: float
+    created_at: str
+    superseded_by: str | None
+
+    # ── JSON data (parsed once on load) ──
+    data: dict = field(default_factory=dict)
+
+    # ── Property accessors into data ──
+
+    @property
+    def content(self) -> str:
+        return self.data["content"]
+
+    @property
+    def summary(self) -> str:
+        return self.data.get("summary", "")
+
+    @property
+    def detail(self) -> str | None:
+        return self.data.get("detail")
+
+    @property
+    def tags(self) -> list[str]:
+        return self.data.get("tags", [])
+
+    @property
+    def keywords(self) -> list[str]:
+        return self.data.get("keywords", [])
+
+    @property
+    def source_session(self) -> str | None:
+        return self.data.get("source_session")
+
+    @property
+    def project(self) -> str | None:
+        return self.data.get("project")
+
+    @property
+    def modified_at(self) -> str | None:
+        return self.data.get("modified_at")
+
+    @property
+    def accessed_at(self) -> str | None:
+        return self.data.get("accessed_at")
+
+    @property
+    def access_count(self) -> int:
+        return self.data.get("access_count", 0)
+
+    @property
+    def expires_at(self) -> str | None:
+        return self.data.get("expires_at")
+
+    @property
+    def visibility(self) -> str:
+        return self.data.get("visibility", "private")
+
+    @property
+    def memory_md_entry(self) -> str | None:
+        return self.data.get("memory_md_entry")
+
+    # ── Serialization ──
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> MemoryRecord:
+        """Construct from a sqlite3.Row (requires conn.row_factory = sqlite3.Row)."""
+        return cls(
+            id=row["id"],
+            space=row["space"],
+            domain=row["domain"],
+            content_type=row["content_type"],
+            importance=row["importance"],
+            confidence=row["confidence"],
+            created_at=row["created_at"],
+            superseded_by=row["superseded_by"],
+            data=json.loads(row["data"]),
+        )
+
+    def to_insert(self) -> tuple:
+        """Returns a 9-tuple for INSERT INTO memories VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?).
+
+        Column order: id, space, domain, content_type, importance,
+                      confidence, created_at, superseded_by, data.
+        """
+        return (
+            self.id, self.space, self.domain, self.content_type,
+            self.importance, self.confidence, self.created_at,
+            self.superseded_by, json.dumps(self.data),
+        )
+```
+
+### 3.10 Common Query Patterns
+
+The JSON-first schema changes how queries are written. Real columns drive filtering and ordering; `json_extract()` pulls display fields from `data` in the `SELECT` clause.
+
+**Single memory lookup (summary for display):**
+
+```sql
+SELECT id, json_extract(data, '$.summary') AS summary,
+       json_extract(data, '$.tags') AS tags_json
+FROM memories
+WHERE id = ?
+```
+
+**Update access tracking (`json_set` for in-place JSON mutation):**
+
+```sql
+UPDATE memories
+SET data = json_set(
+    data,
+    '$.access_count', json_extract(data, '$.access_count') + 1,
+    '$.accessed_at', ?
+)
+WHERE id = ?
+```
+
+**Filter by tag (via `memory_tags`, not JSON scanning):**
+
+```sql
+SELECT m.id, m.importance, m.confidence,
+       json_extract(m.data, '$.summary') AS summary
+FROM memories m
+JOIN memory_tags t ON t.memory_id = m.id
+WHERE t.tag = 'architecture'
+  AND m.superseded_by IS NULL
+ORDER BY m.created_at DESC
+```
+
+**`## Now` section refresh (real columns + json_extract):**
+
+```sql
+SELECT id, json_extract(data, '$.summary') AS summary
+FROM memories
+WHERE content_type = 'event'
+  AND space IN ('user', 'local')
+  AND superseded_by IS NULL
+  AND confidence > 0.30
+ORDER BY created_at DESC
+LIMIT 5
+```
+
+**Critical memories for hot-context loading:**
+
+```sql
+SELECT id, domain, json_extract(data, '$.summary') AS summary,
+       json_extract(data, '$.memory_md_entry') AS md_entry
+FROM memories
+WHERE importance = 'critical'
+  AND superseded_by IS NULL
+ORDER BY created_at DESC
+```
+
+**Multi-tag intersection (memories tagged with ALL of the given tags):**
+
+```sql
+SELECT m.id, json_extract(m.data, '$.summary') AS summary
+FROM memories m
+JOIN memory_tags t ON t.memory_id = m.id
+WHERE t.tag IN ('architecture', 'decision')
+  AND m.superseded_by IS NULL
+GROUP BY m.id
+HAVING COUNT(DISTINCT t.tag) = 2
+```
+
+### 3.11 Appendix: Complete DDL
+
+Full runnable DDL for the entire schema in one block. Apply this to an empty database to create all tables and indexes.
+
+```sql
+-- ═══════════════════════════════════════════════════════════
+-- Canvas Memory: Complete Schema DDL
+-- JSON-first design: real columns serve indexes, everything
+-- else lives in CHECK(json_valid(data)) JSON blobs.
+-- ═══════════════════════════════════════════════════════════
+
+-- ── 1. Core memory table ──────────────────────────────────
+CREATE TABLE memories (
+    id              TEXT PRIMARY KEY,
+    space           TEXT NOT NULL DEFAULT 'user'
+        CHECK (space IN ('user', 'project', 'local')),
+    domain          TEXT NOT NULL,
+    content_type    TEXT NOT NULL DEFAULT 'fact'
+        CHECK (content_type IN (
+            'fact', 'preference', 'event', 'skill',
+            'entity', 'relationship', 'decision'
+        )),
+    importance      TEXT NOT NULL DEFAULT 'medium'
+        CHECK (importance IN ('critical', 'high', 'medium', 'low')),
+    confidence      REAL NOT NULL DEFAULT 0.7
+        CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    created_at      TEXT NOT NULL,
+    superseded_by   TEXT REFERENCES memories(id),
+    data            TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
+);
+
+CREATE INDEX idx_mem_space        ON memories(space);
+CREATE INDEX idx_mem_domain       ON memories(domain);
+CREATE INDEX idx_mem_space_domain ON memories(space, domain);
+CREATE INDEX idx_mem_content_type ON memories(content_type);
+CREATE INDEX idx_mem_importance   ON memories(importance);
+CREATE INDEX idx_mem_confidence   ON memories(confidence);
+CREATE INDEX idx_mem_created_at   ON memories(created_at DESC);
+CREATE INDEX idx_mem_active       ON memories(id) WHERE superseded_by IS NULL;
+CREATE INDEX idx_mem_space_type   ON memories(space, content_type);
+
+-- ── 2. Tag index ──────────────────────────────────────────
+CREATE TABLE memory_tags (
+    memory_id   TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    tag         TEXT NOT NULL CHECK (length(tag) <= 64),
+    PRIMARY KEY (memory_id, tag)
+);
+CREATE INDEX idx_tags_tag ON memory_tags(tag);
+
+-- ── 3. Full-text search ───────────────────────────────────
+CREATE VIRTUAL TABLE memory_fts USING fts5(
+    memory_id UNINDEXED,
+    content,
+    summary,
+    keywords,
+    tokenize = 'porter unicode61'
+);
+
+-- ── 4. Knowledge graph edges ──────────────────────────────
+CREATE TABLE memory_relations (
+    from_id       TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    to_id         TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL
+        CHECK (relation_type IN (
+            'relates-to', 'supports', 'contradicts', 'supersedes',
+            'exemplifies', 'part-of', 'caused-by', 'decided-in', 'applies-to'
+        )),
+    strength      REAL NOT NULL DEFAULT 0.5
+        CHECK (strength >= 0.0 AND strength <= 1.0),
+    PRIMARY KEY (from_id, to_id, relation_type)
+);
+CREATE INDEX idx_relations_to ON memory_relations(to_id);
+
+-- ── 5. Hierarchical graph nodes ───────────────────────────
+CREATE TABLE graph_nodes (
+    id          TEXT PRIMARY KEY,
+    label       TEXT NOT NULL UNIQUE,
+    parent      TEXT REFERENCES graph_nodes(id),
+    data        TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
+);
+CREATE INDEX idx_graph_nodes_parent ON graph_nodes(parent);
+
+-- ── 6. Memory-to-graph-node membership ────────────────────
+CREATE TABLE memory_graph_nodes (
+    memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+    node_id   TEXT NOT NULL REFERENCES graph_nodes(id) ON DELETE CASCADE,
+    PRIMARY KEY (memory_id, node_id)
+);
+CREATE INDEX idx_mgn_node ON memory_graph_nodes(node_id);
+
+-- ── 7. Vector index ──────────────────────────────────────
+CREATE VIRTUAL TABLE memory_vectors USING vec0(
+    memory_id TEXT PRIMARY KEY,
+    embedding FLOAT[1536]
+);
+
+-- ── 8. Capture audit log ─────────────────────────────────
+CREATE TABLE capture_log (
+    id          TEXT PRIMARY KEY,
+    memory_id   TEXT REFERENCES memories(id),
+    captured_at TEXT NOT NULL,
+    data        TEXT NOT NULL DEFAULT '{}'
+        CHECK (json_valid(data))
+);
+CREATE INDEX idx_capture_log_memory ON capture_log(memory_id);
+CREATE INDEX idx_capture_log_at     ON capture_log(captured_at DESC);
 ```
 
 ---
