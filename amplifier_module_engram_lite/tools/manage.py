@@ -478,6 +478,7 @@ def memory_index(
     action: str = "read",
     scope: str = "all",
     project_dir: Path | None = None,
+    content: str | None = None,
 ) -> dict:
     """
     Read, get status of, or trigger rebuild of MEMORY.md hot-surface files.
@@ -532,6 +533,17 @@ def memory_index(
                     }
                 )
         return {"action": "status", "files": files}
+
+    if action == "write":
+        target = scopes[0] if scopes else "user"  # "all" not valid for write
+        if target == "all":
+            return {"success": False, "error": "scope='all' not valid for action='write'"}
+        if not content:
+            return {"success": False, "error": "content is required for action='write'"}
+        path = mmd.get_path(target, project_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        return {"action": "write", "written": True, "scope": target, "path": str(path)}
 
     if action == "rebuild":
         files = [_rebuild_scope(conn, s, project_dir) for s in scopes]

@@ -249,6 +249,65 @@ class TestManage:
         assert s["graph_node_count"] > 0
 
 
+class TestMemoryIndexWrite:
+    def test_write_stores_content(self, conn, tmp_path):
+        """action='write' persists markdown content to the correct path."""
+        md = "# Memory\n\n## Preferences\n- Use pnpm, not npm\n"
+        result = memory_index(  # type: ignore[call-arg]
+            conn, action="write", scope="project", content=md, project_dir=tmp_path
+        )
+        assert result["action"] == "write"
+        assert result["written"] is True
+        assert (tmp_path / ".engram" / "MEMORY.md").read_text() == md
+
+    def test_write_round_trips_through_read(self, conn, tmp_path):
+        """Write then read returns the exact same content."""
+        md = "# Memory\n\n## Stack\n- FastAPI + PostgreSQL\n- Nginx reverse proxy\n"
+        memory_index(conn, action="write", scope="project", content=md, project_dir=tmp_path)  # type: ignore[call-arg]
+        result = memory_index(conn, action="read", scope="project", project_dir=tmp_path)
+        assert result["files"][0]["content"] == md
+
+    def test_write_overwrites_existing_content(self, conn, tmp_path):
+        """Second write replaces previous content entirely."""
+        memory_index(conn, action="write", scope="project", content="# Old\n", project_dir=tmp_path)  # type: ignore[call-arg]
+        memory_index(conn, action="write", scope="project", content="# New\n", project_dir=tmp_path)  # type: ignore[call-arg]
+        result = memory_index(conn, action="read", scope="project", project_dir=tmp_path)
+        assert result["files"][0]["content"] == "# New\n"
+
+    def test_write_creates_parent_dirs(self, conn, tmp_path):
+        """Write creates .engram/ directory if it doesn't exist."""
+        assert not (tmp_path / ".engram").exists()
+        memory_index(conn, action="write", scope="project", content="# x\n", project_dir=tmp_path)  # type: ignore[call-arg]
+        assert (tmp_path / ".engram" / "MEMORY.md").exists()
+
+
+class TestCaptureDecoupled:
+    def test_capture_no_longer_writes_memory_md(self, conn, tmp_path):
+        """memory_capture() stores to DB only — MEMORY.md is untouched."""
+        # Use space="project" so the old code would have written to tmp_path/.engram/MEMORY.md
+        memory_capture(
+            conn,
+            "User prefers tabs in all Python files",
+            content_type="preference",
+            domain="personal/prefs",
+            space="project",
+            project_dir=tmp_path,
+        )
+        assert not (tmp_path / ".engram" / "MEMORY.md").exists()
+
+    def test_capture_still_returns_suggested_entry(self, conn, tmp_path):
+        """memory_capture() still returns memory_md_entry as a format hint."""
+        r = memory_capture(
+            conn,
+            "Use Redis for session caching",
+            content_type="decision",
+            domain="professional/arch",
+            project_dir=tmp_path,
+        )
+        assert "memory_md_entry" in r
+        assert r["memory_md_entry"].startswith("- [")
+
+
 class TestRebuild:
     def test_rebuild_no_longer_returns_cli_stub(self, conn, tmp_path):
         """rebuild action replaces the 'Use CLI' stub with real in-process logic."""

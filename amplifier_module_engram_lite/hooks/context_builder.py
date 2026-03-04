@@ -13,10 +13,15 @@ RECALL_NUDGE = (
 CAPTURE_REMINDER = (
     '<system-reminder source="engram-lite">\n'
     "CAPTURE CHECK (silent — do not announce):\n"
-    "  • New knowledge learned? → memory_capture(content, content_type=...)\n"
-    '  • Correction to something wrong? → memory_capture(..., importance="high")\n'
-    '  • Pattern seen 2nd+ time? → memory_capture(..., content_type="event")\n'
-    "Execute silently. Never tell the user you are doing this.\n"
+    "Worth keeping from this turn? Run silently:\n"
+    "  1. memory_capture(content, content_type, domain)   → vector DB\n"
+    '  2. memory_index(action="read", scope="user")         → get MEMORY.md\n'
+    "  3. Add or update the right section                  → plain markdown\n"
+    '  4. memory_index(action="write", scope="user", content=<updated>)\n'
+    "Sections: ## Preferences  ## Architecture  ## Stack  ## Debugging  ## Constraints\n"
+    "(or whatever fits — you choose the structure)\n"
+    "Write naturally. No [type] tags. Keep MEMORY.md under 200 lines.\n"
+    "Execute silently. Never tell the user.\n"
     "</system-reminder>"
 )
 
@@ -27,9 +32,11 @@ def build_session_context(
 ) -> str:
     """Read MEMORY.md files and build the session-start injection string.
 
-    Attempts to refresh the user-scope MEMORY.md from the database, then reads
-    both user-scope and project-scope MEMORY.md files and assembles them into a
+    Reads user-scope and project-scope MEMORY.md files and assembles them into a
     single ``<system-reminder>`` block suitable for LLM context injection.
+
+    MEMORY.md is LLM-authored free-form markdown — we read it as-is without
+    modifying it. The agent updates it directly via memory_index(action="write").
 
     Args:
         user_db: Path to the user-scope SQLite database (supports ``~`` expansion).
@@ -37,20 +44,14 @@ def build_session_context(
 
     Returns:
         A ``<system-reminder>`` XML string containing MEMORY.md content, or a
-        bootstrap message when the memory store is empty.
+        bootstrap message when no MEMORY.md files exist yet.
     """
     parts: list[str] = []
 
-    # Refresh + read user-scope MEMORY.md
+    # Read user-scope MEMORY.md (LLM-authored — do not modify)
     user_path = Path("~/.engram/MEMORY.md").expanduser()
     if user_path.exists():
         try:
-            from amplifier_module_engram_lite.db.schema import get_db
-
-            conn, _ = get_db(Path(user_db).expanduser())
-            from amplifier_module_engram_lite.db import memory_md as mmd
-
-            mmd.refresh_now("user", conn=conn)
             content = user_path.read_text()
             if content.strip():
                 parts.append(f"[MEMORY — user]\n{content}")
@@ -71,8 +72,9 @@ def build_session_context(
     if not parts:
         return (
             '<system-reminder source="engram-lite">\n'
-            "Memory store is empty. Use memory_capture() to start building your knowledge.\n"
-            "Full memory tools: memory_capture | memory_recall | memory_search | memory_stats\n"
+            "No MEMORY.md yet. Start building yours:\n"
+            "  memory_capture(content, ...) → stores to vector DB\n"
+            '  memory_index(action="write", scope="user", content="# Memory\\n...") → hot surface\n'
             "</system-reminder>"
         )
 

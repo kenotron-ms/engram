@@ -226,11 +226,13 @@ def memory_capture(
     )
     conn.commit()
 
-    # 8. Update MEMORY.md
+    # 8. Build the suggested MEMORY.md entry format.
+    #    The agent writes MEMORY.md directly via memory_index(action="write") —
+    #    capture no longer touches the hot surface file.
     from amplifier_module_engram_lite.db import memory_md as mmd
 
     entry_type = mmd.ENTRY_TYPE_MAP.get(content_type, "fact")
-    entry_line = mmd.append_entry(space, entry_type, summary, project_dir=project_dir)
+    entry_line = f"- [{entry_type}] {summary[:100]}"
 
     # 9. Return result
     return {

@@ -412,7 +412,10 @@ class MemoryIndexTool(_BaseTool):
 
     @property
     def description(self) -> str:
-        return "Read, check status of, or rebuild MEMORY.md hot-surface files."
+        return (
+            "Read, write, check status of, or rebuild MEMORY.md hot-surface files. "
+            "Use action='write' to update MEMORY.md with LLM-authored content."
+        )
 
     @property
     def input_schema(self) -> dict[str, Any]:
@@ -421,13 +424,17 @@ class MemoryIndexTool(_BaseTool):
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "status", "rebuild"],
+                    "enum": ["read", "write", "status", "rebuild"],
                     "default": "read",
                 },
                 "scope": {
                     "type": "string",
                     "enum": ["user", "project", "local", "all"],
                     "default": "all",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full Markdown content to write (required for action='write').",
                 },
             },
         }
@@ -441,5 +448,6 @@ class MemoryIndexTool(_BaseTool):
                 self._conn,
                 action=input.get("action", "read"),
                 scope=input.get("scope", "all"),
+                content=input.get("content"),
             ),
         )
