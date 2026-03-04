@@ -24,6 +24,7 @@ from amplifier_module_engram_lite.db import memory_md as mmd
 from amplifier_module_engram_lite.db import memory_store as ms
 from amplifier_module_engram_lite.db import schema as sch
 from amplifier_module_engram_lite.db import vector_store as vs
+from amplifier_module_engram_lite.tools.capture import memory_capture
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -277,40 +278,24 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
                 continue
             text, flags = parse_args_from_line(rest)
             content_type = flags.get("type", "fact")
-            domain = flags.get("domain", "personal/general")
+            domain = flags.get("domain", None)
             importance = flags.get("importance", "medium")
             tags = [t.strip() for t in flags.get("tags", "").split(",") if t.strip()]
 
-            # Generate a summary (first sentence or truncate)
-            summary = text.split(".")[0].strip()
-            if len(summary) > 120:
-                summary = summary[:120] + "…"
-            if not summary:
-                summary = text[:120]
-
-            # Extract simple keywords (unique words > 4 chars)
-            keywords = list({w.lower() for w in text.split() if len(w) > 4})[:10]
-            keywords = sorted(set(keywords + tags))
-
-            memory_id = ms.insert_memory(
+            result = memory_capture(
                 conn,
-                content=text,
-                summary=summary,
-                domain=domain,
-                space="user",
+                text,
                 content_type=content_type,
+                space="user",
+                domain=domain if domain else None,
                 importance=importance,
-                tags=tags,
-                keywords=keywords,
+                tags=tags or [],
             )
-
-            # Store vector
-            emb = vs.embed(text)
-            vs.insert_vector(conn, memory_id, emb)
-
-            # Update MEMORY.md
+            memory_id = result["memory_id"]
+            summary = result["summary"]
+            domain = result["domain"]
+            entry = result["memory_md_entry"]
             entry_type = mmd.ENTRY_TYPE_MAP.get(content_type, "fact")
-            entry = mmd.append_entry("user", entry_type, summary)
 
             print(
                 f"\n  {c('✓ Captured', GREEN, BOLD)}  {c(f'[{entry_type}] {summary[:60]}', BOLD)}"
@@ -329,32 +314,32 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
         # ── recall ────────────────────────────────────────────────────────────
         elif cmd == "recall":
             if not rest:
-                print(c("  Usage: recall <query>", GRAY))
+                print(c("  Usage: recall <query> [--route auto|vector|graph|hybrid|keyword]", GRAY))
                 continue
-            query = rest.strip()
-            query_vec = vs.embed(query)
-            results = vs.knn_search(conn, query_vec, k=5)
+            query_text, flags = parse_args_from_line(rest)
+            route = flags.get("route", "auto")
+
+            from amplifier_module_engram_lite.retrieval.router import route_query
+
+            results = route_query(conn, query_text, route=route, k=5)
 
             if not results:
                 print(c("  No memories found.", GRAY))
                 continue
 
             print(
-                f"\n  {c('Semantic recall:', BOLD, CYAN)} {c(query, BOLD)}"
+                f"\n  {c('Recall', BOLD, CYAN)} {c(f'[{route}]', DIM)} {c(query_text, BOLD)}"
                 f"  {c(f'({len(results)} results)', GRAY)}"
             )
-            for i, (mem_id, score) in enumerate(results, 1):
-                mem = ms.get_memory(conn, mem_id, track_access=False)
-                if mem:
-                    d = mem["data"]
-                    icon = TYPE_ICONS.get(mem["content_type"], "·")
-                    bar_len = int(score * 20)
-                    bar = c("█" * bar_len, GREEN) + c("░" * (20 - bar_len), GRAY)
-                    print(f"\n  {c(str(i), BOLD)} {bar} {c(f'{score:.2f}', BOLD, GREEN)}")
-                    print(f"    {icon} {c(d.get('summary', ''), BOLD)}  {c(mem['domain'], DIM)}")
-                    if d.get("tags"):
-                        print(f"    {c(' '.join('#' + t for t in d['tags']), CYAN)}")
-                    print(f"    {c('id: ' + mem_id, GRAY)}")
+            for i, r in enumerate(results, 1):
+                icon = TYPE_ICONS.get(r.content_type, "·")
+                bar_len = int(max(0.0, r.score) * 20)
+                bar = c("█" * bar_len, GREEN) + c("░" * (20 - bar_len), GRAY)
+                print(f"\n  {c(str(i), BOLD)} {bar} {c(f'{r.score:.3f}', BOLD, GREEN)}")
+                print(f"    {icon} {c(r.summary, BOLD)}  {c(r.domain, DIM)}")
+                if r.tags:
+                    print(f"    {c(' '.join('#' + t for t in r.tags), CYAN)}")
+                print(f"    {c('id: ' + r.memory_id, GRAY)}")
             print()
 
         # ── search ────────────────────────────────────────────────────────────
@@ -432,25 +417,16 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
         elif cmd == "seed":
             print(c(f"\n  Seeding {len(SEED_MEMORIES)} example memories…", CYAN))
             for content, ctype, domain, importance, tags in SEED_MEMORIES:
-                summary = content.split(".")[0].strip()
-                if len(summary) > 120:
-                    summary = summary[:120] + "…"
-                keywords = sorted({w.lower() for w in content.split() if len(w) > 4} | set(tags))
-                mid = ms.insert_memory(
+                result = memory_capture(
                     conn,
-                    content=content,
-                    summary=summary,
-                    domain=domain,
-                    space="user",
+                    content,
                     content_type=ctype,
+                    space="user",
+                    domain=domain,
                     importance=importance,
                     tags=tags,
-                    keywords=keywords[:15],
                 )
-                emb = vs.embed(content)
-                vs.insert_vector(conn, mid, emb)
-                entry_type = mmd.ENTRY_TYPE_MAP.get(ctype, "fact")
-                mmd.append_entry("user", entry_type, summary)
+                summary = result["summary"]
                 icon = TYPE_ICONS.get(ctype, "·")
                 print(f"  {c('✓', GREEN)} {icon} {c(summary[:55], BOLD)}  {c(domain, GRAY)}")
             print(c('\n  Done! Try: recall "what are my coding preferences"', CYAN))

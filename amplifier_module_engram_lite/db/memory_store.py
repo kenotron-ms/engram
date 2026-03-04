@@ -76,9 +76,7 @@ def insert_memory(
 
 def get_memory(conn: sqlite3.Connection, memory_id: str, track_access: bool = True) -> dict | None:
     """Fetch a memory by ID. Returns dict or None."""
-    row = conn.execute(
-        "SELECT * FROM memories WHERE id = ?", (memory_id,)
-    ).fetchone()
+    row = conn.execute("SELECT * FROM memories WHERE id = ?", (memory_id,)).fetchone()
     if not row:
         return None
     result = dict(row)
@@ -165,9 +163,7 @@ def stats(conn: sqlite3.Connection) -> dict:
     }
     by_space = {
         row[0]: row[1]
-        for row in conn.execute(
-            "SELECT space, COUNT(*) FROM memories GROUP BY space"
-        ).fetchall()
+        for row in conn.execute("SELECT space, COUNT(*) FROM memories GROUP BY space").fetchall()
     }
     by_domain = conn.execute(
         "SELECT domain, COUNT(*) as n FROM memories GROUP BY domain ORDER BY n DESC LIMIT 5"

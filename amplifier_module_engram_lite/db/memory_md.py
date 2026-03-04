@@ -174,7 +174,7 @@ def refresh_now(
         rows = conn.execute(
             """SELECT json_extract(data, '$.summary') as summary
                FROM memories
-               WHERE content_type = 'event' AND superseded_by IS NULL
+               WHERE content_type = 'event'
                ORDER BY created_at DESC LIMIT 5"""
         ).fetchall()
         for row in rows:
