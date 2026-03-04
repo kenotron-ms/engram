@@ -12,6 +12,7 @@
 1. [Overview](#1-overview)
 2. [The RETRIEVE-RESPOND-CAPTURE Loop](#2-the-retrieve-respond-capture-loop)
 3. [Session Initialization Protocol](#3-session-initialization-protocol)
+3b. [MEMORY.md Maintenance Protocol](#3b-memorymd-maintenance-protocol)
 4. [Pre-Response Recall Protocol](#4-pre-response-recall-protocol)
 5. [Post-Response Capture Protocol](#5-post-response-capture-protocol)
 6. [Cross-Reference Cascade](#6-cross-reference-cascade)
@@ -201,6 +202,167 @@ Example:
 | Zero hot context memories | Inject minimal protocol-only reminder (no memory content). |
 | Embedding provider unavailable | Load hot context using keyword/metadata only (skip vector similarity). |
 | Hot context exceeds token budget | Truncate from lowest-importance memories upward. Budget default: 2000 tokens. |
+
+---
+
+## 3b. MEMORY.md Maintenance Protocol
+
+engram-lite maintains its own `MEMORY.md` index files — lightweight, always-in-context summaries of the most important memories. These are **not** Claude Code's native auto-memory. They are the "hot surface" injected at every session start via the engram-lite hook, requiring no DB query for hot context.
+
+### MEMORY.md File Locations
+
+| File | Scope | Git Status |
+|---|---|---|
+| `~/.engram/MEMORY.md` | User — preferences, constraints, domain knowledge | **Never committed** (user-private) |
+| `.engram/MEMORY.md` | Project — decisions, architecture, status | **Committable** (shared with team) |
+| `.engram/MEMORY.local.md` | Local — current focus, ephemeral context | **Gitignored** |
+
+### Entry Format
+
+```
+- [type] Statement — optional context
+```
+
+**Entry types:** `pref`, `constraint`, `domain`, `decision`, `arch`, `pattern`, `correction`, `status`, `person`, `skill`, `event`
+
+**Sections:**
+
+| Section | File(s) | Content |
+|---|---|---|
+| `## You` | `~/.engram/MEMORY.md` | User-scope preferences, constraints, domain knowledge |
+| `## Project: {name}` | `.engram/MEMORY.md` | Project decisions, architecture, status |
+| `## Now` | `.engram/MEMORY.local.md` | Current focus — refreshed each session start |
+
+**Line budget:** max 60 entries per section, max 100 lines per file, combined injection ≤ 200 lines.
+
+### A. When to Update MEMORY.md
+
+MEMORY.md is updated **after `memory_capture()` completes**, based on the captured memory's type and space:
+
+| Captured Memory | Target Section | Target File |
+|---|---|---|
+| `content_type='preference'` or `content_type='constraint'` | `## You` | `~/.engram/MEMORY.md` |
+| `content_type='decision'` or `content_type='skill'` or `content_type='fact'` with `space='project'` | `## Project: {name}` | `.engram/MEMORY.md` |
+| `content_type='event'` with `space='local'` | `## Now` | `.engram/MEMORY.local.md` (but see §D — `## Now` is fully refreshed at session start, not incrementally appended) |
+| `content_type='entity'` (person) | `## You` | `~/.engram/MEMORY.md` (with `[person]` type) |
+| Corrections (`memory_update()` where content changed significantly) | Same section as original | Update the existing entry **in-place** |
+
+### B. Entry Generation Rule
+
+The MEMORY.md entry is a **compressed version** of the memory's `summary` field — stripped to ≤ 100 characters, keeping the actionable conclusion, dropping supporting evidence (that lives in the DB).
+
+```
+summary: "User prefers inductive writing — conclusion-first, evidence below.
+          Applies across all documents, emails, code comments."
+
+→ MEMORY.md entry:
+  - [pref] Inductive writing (conclusion-first) — applies everywhere
+```
+
+**Rule:** Strip to ≤ 100 chars. Keep the actionable conclusion. Drop supporting evidence.
+
+### C. Pruning Algorithm
+
+When a section exceeds 60 entries, the lowest-scored entry is removed:
+
+```python
+def prune_memory_md_section(section_entries, db):
+    if len(section_entries) <= 60:
+        return section_entries
+    # Score each entry
+    scores = []
+    for entry in section_entries:
+        memory = db.get_by_summary_match(entry.text)
+        score = memory.confidence * importance_weights[memory.importance]
+        scores.append((score, entry))
+    # Remove lowest-scored entry
+    scores.sort(key=lambda x: x[0])
+    removed = scores[0][1]
+    # Log the pruning
+    db.capture_log.add(trigger='prune', raw_context=f"MEMORY.md pruned: {removed.text}")
+    return [e for e in section_entries if e != removed]
+```
+
+The pruned entry remains in `engram.db` — only its MEMORY.md line is removed. The DB never prunes (it archives instead).
+
+### D. `## Now` Section Refresh
+
+The `## Now` section is **fully regenerated** at session start (not incrementally appended during a session):
+
+```python
+def refresh_now_section(db, project_name):
+    # Get last 5 event-type memories, most recent first
+    recent_events = db.query(
+        "SELECT summary, created_at FROM memories "
+        "WHERE content_type = 'event' AND space IN ('user', 'local') "
+        "ORDER BY created_at DESC LIMIT 5"
+    )
+    # Get current project status memory if exists
+    project_status = db.query(
+        "SELECT summary FROM memories "
+        "WHERE content_type = 'fact' AND domain LIKE 'projects/%' "
+        "AND importance IN ('high', 'critical') "
+        "ORDER BY modified_at DESC LIMIT 3"
+    )
+    # Format as Now entries
+    entries = []
+    for event in recent_events:
+        entries.append(f"- [event] {event.summary[:80]}")
+    for status in project_status:
+        entries.append(f"- [status] {status.summary[:80]}")
+    return entries  # max 10 total
+```
+
+### E. File Write Protocol
+
+MEMORY.md files are maintained **by the engram-lite library, not by the AI**:
+
+- Files are written using Python's `pathlib.Path.write_text()` — not via the AI's bash or write tools.
+- The AI calls `memory_capture()` → the tool internally updates the appropriate MEMORY.md file.
+- The AI **never writes directly** to MEMORY.md files.
+
+This is a key distinction from the full Engram system where the AI may edit memory files directly.
+
+### F. Cross-Reference with the RETRIEVE→RESPOND→CAPTURE Loop
+
+MEMORY.md operates silently within the existing loop:
+
+| Phase | MEMORY.md Role |
+|---|---|
+| **Session start** | Hook reads all MEMORY.md files → injects as `<system-reminder>` → AI has hot context without any tool calls. |
+| **During session** | AI uses `memory_recall()` for deep search beyond what's in MEMORY.md. MEMORY.md is not re-read mid-session. |
+| **Capture** | `memory_capture()` completes → library silently updates the relevant MEMORY.md file. AI doesn't know or announce it. |
+
+### G. Staleness Detection
+
+When `memory_update()` is called to correct an existing memory:
+
+1. **Find** the corresponding MEMORY.md entry by matching `summary` text against entry lines.
+2. **Replace** the entry line with the updated content (re-compressed via the §B rule).
+3. **Remove** the entry if the memory was `importance='critical'` but was downgraded below `high`.
+
+### H. Anti-Patterns for MEMORY.md
+
+| Anti-Pattern | Why It's Wrong |
+|---|---|
+| Put full content in a MEMORY.md entry | That's what the DB is for. Entries are ≤ 100 char summaries. |
+| Exceed 100 chars per entry line | Breaks the line budget and bloats injection context. |
+| Put temporary session context in `## You` or `## Project` | Use `## Now` for ephemeral context. |
+| Duplicate entries | Update in-place when the same topic reappears. |
+| Commit `~/.engram/MEMORY.md` to any repo | User-scope file is private. Only `.engram/MEMORY.md` is committable. |
+| Have the AI write directly to MEMORY.md | The library owns these files. AI calls `memory_capture()` only. |
+
+### I. MEMORY.md vs DB
+
+| Aspect | MEMORY.md | engram.db |
+|---|---|---|
+| **Access** | Always in context (via hook injection) | On-demand via `memory_recall()` |
+| **Content** | 1-line summaries (≤ 100 chars) | Full content + embeddings |
+| **Query** | None needed — pre-loaded | Vector KNN + BM25 + Graph |
+| **Edit** | Python `write_text()` (by the library) | SQL INSERT/UPDATE |
+| **Size** | ≤ 100 lines per file | Unlimited |
+| **When full** | Prune lowest-scored entries | Never prunes (archive instead) |
+| **Git** | Project MEMORY.md is committable | Never committed (`*.db` gitignored) |
 
 ---
 

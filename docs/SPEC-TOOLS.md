@@ -18,6 +18,7 @@
    - [memory_forget](#36-memory_forget)
    - [memory_graph_explore](#37-memory_graph_explore)
    - [memory_stats](#38-memory_stats)
+   - [memory_index](#39-memory_index)
 4. [Capture Decision Tree](#4-capture-decision-tree)
 5. [Retrieve Decision Tree](#5-retrieve-decision-tree)
 6. [Cross-Reference Cascade](#6-cross-reference-cascade)
@@ -174,6 +175,8 @@ This is critical for recency decay scoring and session pre-loading.
 - A pattern is observed for the second or more time
 - The user explicitly asks the AI to "remember" something
 
+> **Side effect:** Capturing automatically updates the appropriate `MEMORY.md` index file (user, project, or local scope). No separate call is needed — the return value includes the generated entry.
+
 #### Input Schema
 
 ```json
@@ -206,9 +209,9 @@ This is critical for recency decay scoring and session pre-loading.
         },
         "space": {
             "type": "string",
-            "enum": ["user", "project"],
+            "enum": ["user", "project", "local"],
             "default": "user",
-            "description": "'user' = persists across projects; 'project' = scoped to current project."
+            "description": "'user' = persists across projects (~/.engram/MEMORY.md); 'project' = scoped to current project (.engram/MEMORY.md); 'local' = machine-specific, gitignored (.engram/MEMORY.local.md)."
         },
         "importance": {
             "type": "string",
@@ -242,9 +245,11 @@ This is critical for recency decay scoring and session pre-loading.
         "summary":        {"type": "string", "description": "Generated summary of the stored content."},
         "domain":         {"type": "string", "description": "Assigned domain (provided or inferred)."},
         "tags":           {"type": "array", "items": {"type": "string"}},
-        "keywords_count": {"type": "integer", "description": "Number of extracted keywords for FTS."}
+        "keywords_count":    {"type": "integer", "description": "Number of extracted keywords for FTS."},
+        "memory_md_entry":   {"type": "string", "description": "Compressed entry line written to MEMORY.md (≤100 chars)."},
+        "memory_md_file":    {"type": "string", "description": "Path of the MEMORY.md file that was updated."}
     },
-    "required": ["memory_id", "summary", "domain", "tags", "keywords_count"]
+    "required": ["memory_id", "summary", "domain", "tags", "keywords_count", "memory_md_entry", "memory_md_file"]
 }
 ```
 
@@ -283,7 +288,9 @@ This is critical for recency decay scoring and session pre-loading.
     "summary": "User prefers Rust over Go for systems programming due to borrow checker providing memory safety without GC overhead.",
     "domain": "user/preferences/languages",
     "tags": ["rust", "go", "programming-language", "systems"],
-    "keywords_count": 8
+    "keywords_count": 8,
+    "memory_md_entry": "- [pref] Rust over Go for systems programming — borrow checker, no GC",
+    "memory_md_file": "~/.engram/MEMORY.md"
 }
 ```
 
@@ -291,6 +298,51 @@ This is critical for recency decay scoring and session pre-loading.
 
 - Expected latency: <100ms (embedding: ~50ms, DB write: ~10ms, FTS update: ~10ms, graph update: ~20ms)
 - Embedding is the bottleneck; batched captures should be considered for bulk imports
+
+#### Capture Pipeline
+
+The full internal pipeline (8 steps):
+
+1. Validate input (`content_type`, `space`, `domain`)
+2. Generate summary (LLM call — inductive, conclusion-first, ≤200 chars)
+3. Extract tags and keywords (LLM call)
+4. Generate embedding (provider call)
+5. Write to DB (`INSERT` into `memories` + `memory_vectors` + `memory_tags` + `memory_fts`)
+6. Run cross-reference cascade (find relations, update graph nodes)
+7. **Update MEMORY.md** (generate entry, append to section, prune if needed)
+8. Return `{memory_id, summary, domain, tags, memory_md_entry, memory_md_file}`
+
+#### MEMORY.md Integration (Step 7)
+
+After writing to the DB, `memory_capture` generates a compressed entry line and appends it to the appropriate MEMORY.md file:
+
+| `space` | File | Scope |
+|---|---|---|
+| `'user'` | `~/.engram/MEMORY.md` | Cross-project, follows the user |
+| `'project'` | `.engram/MEMORY.md` | Project-scoped, committed to repo |
+| `'local'` | `.engram/MEMORY.local.md` | Machine-specific, gitignored |
+
+**Entry generation rule:** Convert `summary` → single MEMORY.md line, ≤100 chars. Actionable conclusion first. Strip evidence.
+
+```
+memory.summary = "User prefers inductive writing — conclusion-first, evidence below."
+→ MEMORY.md entry: - [pref] Inductive writing (conclusion-first) — applies everywhere
+```
+
+**Content-type → entry type mapping:**
+
+| `content_type` | MEMORY.md `[type]` tag | Section |
+|---|---|---|
+| `preference` | `[pref]` | `## You` (user) |
+| `fact` | `[arch]` or `[status]` | `## Project` (project) |
+| `decision` | `[decision]` | `## Project` (project) |
+| `skill` | `[skill]` | `## You` (user) |
+| `entity` (person) | `[person]` | `## You` (user) |
+| `relationship` | `[pattern]` | whichever space matches |
+| `event` | `[event]` | `## Now` (refreshed, not appended) |
+| `constraint` | `[constraint]` | `## You` (user) |
+
+**Pruning:** After adding the new entry, if the target section exceeds 60 entries, the entry with the lowest `confidence × importance_weight` score is removed from MEMORY.md (it remains in the DB).
 
 ---
 
@@ -712,11 +764,12 @@ When `content` is updated:
 3. FTS index is updated in `memory_fts`
 4. `updated_at` timestamp is set
 5. Graph node assignments may change if domain shifts
+6. **MEMORY.md is updated:** The old summary is fuzzy-matched in the corresponding MEMORY.md file and replaced with the new compressed entry. If `importance` changed to `'low'`, the entry is removed from MEMORY.md (it stays in DB).
 
 #### Performance
 
 - Metadata-only update: <20ms
-- Content update (re-embed): <100ms
+- Content update (re-embed + MEMORY.md): <120ms
 
 ---
 
@@ -897,6 +950,7 @@ WHERE memory_id = :memory_id;
 - Memory remains in database for audit trail
 - Excluded from all retrieval queries via `WHERE deleted_at IS NULL`
 - Relations are preserved (may be useful for graph integrity)
+- **MEMORY.md:** Entry is removed from the corresponding MEMORY.md file
 
 **Hard delete**:
 ```sql
@@ -907,6 +961,7 @@ DELETE FROM memory_fts WHERE memory_id = :memory_id;
 DELETE FROM memory_vectors WHERE memory_id = :memory_id;
 DELETE FROM memories WHERE memory_id = :memory_id;
 ```
+- **MEMORY.md:** Entry is removed from the corresponding MEMORY.md file
 
 #### Example
 
@@ -1237,6 +1292,127 @@ LIMIT 10;
 
 ---
 
+### 3.9 `memory_index`
+
+**Purpose:** Read, rebuild, or check the status of MEMORY.md index files.
+
+**When the AI should use this tool:**
+- `action='read'` — When you want to see the full MEMORY.md index without it being injected again
+- `action='rebuild'` — When MEMORY.md is suspected stale or corrupt (e.g., entries don't match DB)
+- `action='status'` — Quick health check on line counts, entry counts, and last-updated timestamps
+
+#### Input Schema
+
+```json
+{
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["read", "rebuild", "status"],
+            "default": "read",
+            "description": "'read' = return current MEMORY.md content; 'rebuild' = regenerate from DB (expensive); 'status' = return health/counts."
+        },
+        "scope": {
+            "type": "string",
+            "enum": ["user", "project", "local", "all"],
+            "default": "all",
+            "description": "Which MEMORY.md file(s) to target."
+        }
+    }
+}
+```
+
+#### Return Schema
+
+```json
+{
+    "type": "object",
+    "properties": {
+        "files": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scope":        {"type": "string", "enum": ["user", "project", "local"]},
+                    "path":         {"type": "string", "description": "Absolute path to the MEMORY.md file."},
+                    "exists":       {"type": "boolean"},
+                    "content":      {"type": "string", "description": "File content (only for action='read')."},
+                    "entry_count":  {"type": "integer", "description": "Number of entries in the file."},
+                    "line_count":   {"type": "integer", "description": "Total lines in the file."},
+                    "last_updated": {"type": "string", "format": "date-time", "description": "Last modification timestamp."},
+                    "rebuilt":      {"type": "boolean", "description": "Whether the file was regenerated (only for action='rebuild')."}
+                },
+                "required": ["scope", "path", "exists"]
+            }
+        }
+    },
+    "required": ["files"]
+}
+```
+
+#### Error Cases
+
+| Error Code | Condition |
+|---|---|
+| `INVALID_INPUT` | `action` not in allowed enum |
+| `INVALID_INPUT` | `scope` not in allowed enum |
+| `DB_ERROR` | SQLite failure during rebuild |
+| `IO_ERROR` | Cannot read or write MEMORY.md file |
+
+#### Example
+
+**Call:**
+```json
+{
+    "tool": "memory_index",
+    "arguments": {
+        "action": "status",
+        "scope": "all"
+    }
+}
+```
+
+**Response:**
+```json
+{
+    "files": [
+        {
+            "scope": "user",
+            "path": "~/.engram/MEMORY.md",
+            "exists": true,
+            "entry_count": 42,
+            "line_count": 68,
+            "last_updated": "2025-03-01T16:45:00Z"
+        },
+        {
+            "scope": "project",
+            "path": ".engram/MEMORY.md",
+            "exists": true,
+            "entry_count": 27,
+            "line_count": 45,
+            "last_updated": "2025-03-01T14:20:00Z"
+        },
+        {
+            "scope": "local",
+            "path": ".engram/MEMORY.local.md",
+            "exists": false,
+            "entry_count": 0,
+            "line_count": 0,
+            "last_updated": null
+        }
+    ]
+}
+```
+
+#### Performance
+
+- `read`: <5ms (file I/O only)
+- `status`: <10ms (file stat + line counting)
+- `rebuild`: <2s per scope (DB query + LLM compression for each entry)
+
+---
+
 ## 4. Capture Decision Tree
 
 The following LLM prompt is injected as a system instruction to guide the AI's capture behavior. It determines **what** to capture and **how** to structure it.
@@ -1318,6 +1494,16 @@ STEP 2: HOW SHOULD I STRUCTURE THIS?
 STEP 3: CAPTURE
   Call memory_capture with the structured parameters from Step 2.
   Do NOT tell the user you are capturing. Do NOT say "I'll remember that."
+
+  → memory_capture internally performs these steps:
+    1. Validate input (content_type, space, domain)
+    2. Generate summary (LLM call — inductive, conclusion-first, ≤200 chars)
+    3. Extract tags and keywords (LLM call)
+    4. Generate embedding (provider call)
+    5. Write to DB (INSERT into memories + memory_vectors + memory_tags + memory_fts)
+    6. Run cross-reference cascade (find relations, update graph nodes)
+    7. Update MEMORY.md (generate ≤100-char entry, append to section, prune if >60 entries)
+    8. Return {memory_id, summary, domain, tags, memory_md_entry, memory_md_file}
 ```
 
 ---

@@ -73,6 +73,190 @@ Project-space results receive a **1.15× relevance boost** when the active worki
 
 ---
 
+## 2b. MEMORY.md Index Files
+
+Alongside each SQLite database, engram-lite maintains **plain-text Markdown index files** as a first-class storage artifact. These are engram-lite's own files — they are **not** Claude Code's native auto-memory (`CLAUDE.md`).
+
+**Why both a DB and index files?**
+
+1. **Zero-query session start.** MEMORY.md files are injected into the agent context by the engram-lite hook at session init. No DB connection, no embedding lookup, no latency — just `read_file`.
+2. **Human-readable and human-editable.** Users and teammates can open, scan, and hand-edit these files in any text editor.
+3. **Bridge pattern.** The files bridge the Engram "file-based memory" pattern (simple, portable, git-friendly) with the vector DB (powerful, queryable, semantic). Each MEMORY.md entry is a 1-line summary pointing into deeper DB content.
+
+### 2b.1 File Locations
+
+engram-lite produces three MEMORY.md files, one per scope:
+
+| File | Scope | Committable? | Contents |
+|------|-------|-------------|----------|
+| `~/.engram/MEMORY.md` | User | Never (personal, cross-project) | `## You` + `## Now` |
+| `<project>/.engram/MEMORY.md` | Project | Yes (team-shareable) | `## Project: {name}` + `## Now` |
+| `<project>/.engram/MEMORY.local.md` | Local | No (gitignored, machine-specific) | `## Now` only (plus machine-specific overrides) |
+
+**Rationale:** The three-file split mirrors the space model (Section 2) but adds a `local` scope for machine-specific context (paths, env vars, local tool versions) that shouldn't travel with the repo or the user profile.
+
+### 2b.2 File Format
+
+Every MEMORY.md file uses YAML frontmatter followed by three structured sections:
+
+```markdown
+---
+scope: user              # user | project | local
+updated: 2026-03-03T17:44:38Z
+managed-by: engram-lite
+db: ~/.engram/engram.db
+entries: 12
+---
+
+# Memory
+
+## You
+<!-- Personal preferences, working style, constraints — apply across all projects.
+     Added/updated by memory_capture(space='user'). Pruned when entries > 60. -->
+- [pref] Prefers inductive writing (conclusion-first) for all output
+- [constraint] macOS, Homebrew, VS Code; avoids Docker
+- [domain] Healthcare/HIPAA domain familiarity
+→ Deep search: memory_recall("user preferences") | memory_recall("working style")
+
+## Project: {project-name}
+<!-- Project-specific decisions, patterns, context.
+     Added/updated by memory_capture(space='project'). Pruned when entries > 60. -->
+- [arch] SQLite-vec + dual-route retrieval (Mnemis System-1/2)
+- [decision] MCP for Claude Code tools; orchestrator:complete not response:complete
+- [status] Specs complete, implementation pending
+→ Deep search: memory_recall("project decisions") | memory_recall("{project-name}")
+
+## Now
+<!-- Current session focus — refreshed at session start from recent events in DB. -->
+- Working on: MEMORY.md integration into engram-lite specs
+- Context: canvas-memory directory
+→ Recall anything: memory_recall("{your query}")
+```
+
+**Frontmatter fields:**
+
+| Field | Purpose |
+|-------|---------|
+| `scope` | Which scope this file represents (`user`, `project`, `local`) |
+| `updated` | ISO 8601 timestamp of last write by engram-lite |
+| `managed-by` | Identifies the managing system (always `engram-lite`) |
+| `db` | Path to the backing SQLite database for this scope |
+| `entries` | Count of bullet entries across all sections (for quick budget checks) |
+
+### 2b.3 Section Ownership
+
+Not every section appears in every file:
+
+| Section | `~/.engram/MEMORY.md` | `.engram/MEMORY.md` | `.engram/MEMORY.local.md` |
+|---------|-----------------------|---------------------|--------------------------|
+| `## You` | ✓ (primary home) | — | — |
+| `## Project: {name}` | — | ✓ (primary home) | — |
+| `## Now` | ✓ | ✓ | ✓ |
+
+The `## Now` section appears in **all three files** and is refreshed at every session start from the last 5 `event`-type memories in the corresponding DB (see Section 2b.6).
+
+### 2b.4 Entry Types
+
+Each bullet in a MEMORY.md section follows the format: `- [type] Statement — optional context`
+
+| Type | Meaning | Typical Section |
+|------|---------|-----------------|
+| `pref` | User preference or working style | `## You` |
+| `constraint` | Environmental or personal constraint | `## You` |
+| `domain` | Domain expertise or familiarity | `## You` |
+| `skill` | Technical skill or tool proficiency | `## You` |
+| `person` | Person/collaborator context | `## You` |
+| `arch` | Architecture or design pattern | `## Project` |
+| `decision` | Recorded decision with rationale | `## Project` |
+| `pattern` | Code pattern or convention | `## Project` |
+| `correction` | Corrected prior assumption | Any |
+| `status` | Current project or task status | `## Project` / `## Now` |
+| `event` | Timestamped occurrence | `## Now` |
+
+### 2b.5 Line Budgets and Pruning
+
+MEMORY.md files are injected into every session, so size discipline is critical.
+
+**Soft limits (enforced by `memory_capture`):**
+
+| Section | Max Entries | ~Lines (with headers) |
+|---------|------------|-----------------------|
+| `## You` | 60 | ~65 |
+| `## Project: {name}` | 60 | ~65 |
+| `## Now` | 10 | ~15 |
+| **Total per file** | — | **≤ 100** |
+| **Combined injection (user + project + local)** | — | **≤ 200** |
+
+**Pruning algorithm** (triggered when a section exceeds its entry limit):
+
+1. Compute `score = confidence × importance_weight` for each entry in the section, where `importance_weight` maps `critical=4, high=3, medium=2, low=1`.
+2. Find the entry with the **lowest score**.
+3. Remove that line from MEMORY.md. The underlying memory remains in the DB permanently — only its surface-level representation is pruned.
+4. Write a pruning event to the `capture_log` table with `trigger = 'prune'`.
+
+### 2b.6 `## Now` Section Refresh Algorithm
+
+At session start, the engram-lite hook refreshes the `## Now` section in all three MEMORY.md files:
+
+```python
+def refresh_now_section(conn, memory_md_path: str):
+    """Rebuild ## Now from the 5 most recent event-type memories."""
+    rows = conn.execute("""
+        SELECT summary, content_type, created_at
+        FROM memories
+        WHERE content_type = 'event'
+          AND superseded_by IS NULL
+          AND confidence > 0.30
+        ORDER BY created_at DESC
+        LIMIT 5
+    """).fetchall()
+
+    lines = ["## Now"]
+    for row in rows:
+        lines.append(f"- {row['summary']}")
+    lines.append('→ Recall anything: memory_recall("{your query}")')
+
+    _replace_section(memory_md_path, "## Now", lines)
+    _update_frontmatter_timestamp(memory_md_path)
+```
+
+The `## You` and `## Project` sections are **not** refreshed at session start — they are only modified by `memory_capture` and `memory_forget` calls during a session.
+
+### 2b.7 Relationship to the Database
+
+A memory can exist in the DB only, in MEMORY.md only (not recommended), or in both:
+
+| State | MEMORY.md | DB | How it happens |
+|-------|-----------|-----|----------------|
+| Normal captured memory | 1-line summary: `[type] Statement` | Full entry with embedding + metadata | `memory_capture()` writes to both |
+| Pruned from surface | — | Full entry (unchanged) | Line budget exceeded; pruning removed the MEMORY.md line |
+| Soft-forgotten | — | Full entry (`confidence > 0`) | `memory_forget(hard_delete=False)` |
+| Hard-forgotten | — | — | `memory_forget(hard_delete=True)` |
+| Human-edited entry | Hand-written line | May have no DB backing | User edited the file directly |
+
+**Key invariant:** MEMORY.md is a **lossy projection** of the DB. The DB is the source of truth. If the two diverge, the DB wins on the next `memory_capture` or pruning cycle.
+
+### 2b.8 `.gitignore` Guidance
+
+For project-scoped `.engram/` directories:
+
+```gitignore
+# engram-lite: local-scope memory (machine-specific, not for team)
+.engram/MEMORY.local.md
+
+# engram-lite: never commit the database or its WAL/SHM files
+.engram/engram.db
+.engram/engram.db-wal
+.engram/engram.db-shm
+
+# engram-lite: commit these (project-shareable):
+# .engram/MEMORY.md  ← intentionally NOT ignored
+```
+
+The user-scope `~/.engram/` directory is outside any repo and never committed.
+
+---
+
 ## 3. Full Annotated Schema
 
 ### 3.1 Core Memory Table

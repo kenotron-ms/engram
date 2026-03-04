@@ -174,27 +174,53 @@ class CanvasMemoryHook:
 
     # ── session:start ──────────────────────────────────────────────
 
-    async def on_session_start(self, event) -> HookResult:
-        """Load user context summary at session start.
+    async def on_session_start(self, event: str, data: dict[str, Any]) -> HookResult:
+        """Inject MEMORY.md hot context at session start.
 
-        Queries both user and project DBs for critical + high importance
-        memories and recently accessed memories. Formats as a system
-        reminder block.
+        Reads engram-lite's pre-computed MEMORY.md index files (not the DB).
+        The only DB query is a targeted refresh of the ## Now section
+        with the last 5 events.
         """
-        context_block = await self.loader.build_session_context(
-            space=self._detect_space(event),
-            budget_tokens=self.config.hot_context_limit,
-            max_memories=self.config.preload_max_memories,
-        )
+        parts = []
 
-        if not context_block:
-            return HookResult(action="pass")
+        # 1. Read user-scope MEMORY.md
+        user_memory_path = Path.home() / ".engram" / "MEMORY.md"
+        if user_memory_path.exists():
+            content = user_memory_path.read_text()
+            # Refresh the ## Now section from DB before injecting
+            content = self._refresh_now_section(content)
+            user_memory_path.write_text(content)
+            parts.append(f"[MEMORY — user]\n{content}")
+
+        # 2. Read project-scope MEMORY.md
+        project_memory_path = Path.cwd() / ".engram" / "MEMORY.md"
+        if project_memory_path.exists():
+            content = project_memory_path.read_text()
+            parts.append(f"[MEMORY — project]\n{content}")
+
+        # 3. Read local-scope MEMORY.md
+        local_memory_path = Path.cwd() / ".engram" / "MEMORY.local.md"
+        if local_memory_path.exists():
+            content = local_memory_path.read_text()
+            parts.append(f"[MEMORY — local]\n{content}")
+
+        if not parts:
+            # First run — no MEMORY.md files yet — initialize them
+            self._initialize_memory_files()
+            return HookResult(action="continue")
+
+        injection = (
+            '<system-reminder source="engram-lite">\n'
+            + "\n\n".join(parts)
+            + "\n\nFull memory: memory_recall(query) | memory_search(query) | memory_graph_explore()"
+            + "\n</system-reminder>"
+        )
 
         return HookResult(
             action="inject_context",
-            context_injection=context_block,
+            context_injection=injection,
             context_injection_role="system",
-            ephemeral=True,
+            ephemeral=False,      # Persist — this is session context, not per-turn
             suppress_output=True,
         )
 
@@ -254,6 +280,54 @@ class CanvasMemoryHook:
         )
 
     # ── helpers ────────────────────────────────────────────────────
+
+    def _refresh_now_section(self, memory_content: str) -> str:
+        """Replace ## Now section with fresh events from DB."""
+        db = get_db(self.user_db_path)
+        recent = db.execute(
+            "SELECT summary FROM memories WHERE content_type='event' "
+            "ORDER BY created_at DESC LIMIT 5"
+        ).fetchall()
+
+        now_lines = ["## Now\n<!-- Refreshed at session start from recent events. -->"]
+        for row in recent:
+            now_lines.append(f"- [event] {row[0][:80]}")
+        now_lines.append('→ Recall anything: memory_recall("{query}")')
+
+        # Replace existing ## Now section
+        import re
+        new_now = "\n".join(now_lines)
+        updated = re.sub(r'## Now\n.*?(?=\n##|\Z)', new_now, memory_content, flags=re.DOTALL)
+        return updated
+
+    def _initialize_memory_files(self) -> None:
+        """Create blank MEMORY.md files on first run."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+
+        user_dir = Path.home() / ".engram"
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        user_template = f"""\
+---
+scope: user
+updated: {now}
+managed-by: engram-lite
+db: {user_dir / 'engram.db'}
+entries: 0
+---
+
+# Memory
+
+## You
+<!-- Personal preferences, working style, constraints — added by memory_capture(). -->
+→ No memories yet. They'll appear here as you work.
+
+## Now
+<!-- Current session focus — refreshed at session start. -->
+→ Starting fresh. Use memory_capture() to build your memory store.
+"""
+        (user_dir / "MEMORY.md").write_text(user_template)
 
     def _detect_space(self, event) -> str | None:
         """Detect whether this is a project or user session."""
@@ -574,6 +648,16 @@ def _escape_xml(text: str) -> str:
             .replace('"', "&quot;"))
 ```
 
+### 2.7 First-Run Initialization
+
+When no MEMORY.md files exist (first run), `on_session_start` calls `_initialize_memory_files()` to bootstrap the system:
+
+1. Creates `~/.engram/` directory if missing.
+2. Writes a blank `~/.engram/MEMORY.md` with YAML frontmatter (`scope: user`, `entries: 0`, `managed-by: engram-lite`) and stub sections (`## You`, `## Now`).
+3. Returns `HookResult(action="continue")` — no context is injected on the very first session. The user starts with a clean slate; memories accumulate through the capture pipeline and populate MEMORY.md on subsequent sessions.
+
+Project-scope (`<project>/.engram/MEMORY.md`) and local-scope (`<project>/.engram/MEMORY.local.md`) files are created by `engram-lite init` when the user initializes a project, not by the session-start hook.
+
 ---
 
 ## 3. Claude Code Platform
@@ -657,27 +741,51 @@ def _escape_xml(text: str) -> str:
 
 ```bash
 #!/usr/bin/env bash
-# .claude-plugin/hooks/session-start.sh
+# hooks/session-start.sh — inject MEMORY.md hot context
 #
-# Loads critical user context at session start.
-# Output is injected as a system reminder into the conversation.
+# Reads pre-computed MEMORY.md index files and injects them directly.
+# The only DB touch is `engram-lite refresh-now` for the ## Now section.
 
 set -euo pipefail
 
-# Resolve database paths
-USER_DB="${ENGRAM_USER_DB:-$HOME/.engram-lite/user.db}"
-PROJECT_DB="${ENGRAM_PROJECT_DB:-.engram-lite/project.db}"
-HOT_LIMIT="${ENGRAM_HOT_CONTEXT_LIMIT:-2000}"
-MAX_MEMORIES="${ENGRAM_PRELOAD_MAX:-20}"
+ENGRAM_BIN="${ENGRAM_BIN:-engram-lite}"
+USER_MEMORY="${HOME}/.engram/MEMORY.md"
+PROJECT_MEMORY="${PWD}/.engram/MEMORY.md"
+LOCAL_MEMORY="${PWD}/.engram/MEMORY.local.md"
 
-# Delegate to the engram-lite CLI
-exec engram-lite inject-context \
-    --user-db "$USER_DB" \
-    --project-db "$PROJECT_DB" \
-    --context-type session-start \
-    --budget "$HOT_LIMIT" \
-    --max-memories "$MAX_MEMORIES" \
-    --format xml
+# Start the system-reminder
+echo '<system-reminder source="engram-lite">'
+
+# Refresh ## Now section and inject user MEMORY.md
+if [ -f "$USER_MEMORY" ]; then
+    "$ENGRAM_BIN" refresh-now "$USER_MEMORY" 2>/dev/null || true
+    echo "[MEMORY — user]"
+    cat "$USER_MEMORY"
+    echo ""
+fi
+
+# Inject project MEMORY.md
+if [ -f "$PROJECT_MEMORY" ]; then
+    echo "[MEMORY — project]"
+    cat "$PROJECT_MEMORY"
+    echo ""
+fi
+
+# Inject local MEMORY.md
+if [ -f "$LOCAL_MEMORY" ]; then
+    echo "[MEMORY — local]"
+    cat "$LOCAL_MEMORY"
+    echo ""
+fi
+
+# No files? Silently initialize
+if [ ! -f "$USER_MEMORY" ] && [ ! -f "$PROJECT_MEMORY" ]; then
+    "$ENGRAM_BIN" init 2>/dev/null || true
+    echo "Memory initialized. Use memory tools to build your knowledge store."
+fi
+
+echo "Full memory: memory_recall(query) | memory_search(query)"
+echo '</system-reminder>'
 ```
 
 ### 3.6 UserPromptSubmit Hook
@@ -836,61 +944,104 @@ The `source="engram-lite"` attribute identifies the origin of the injection for 
 
 ### 4.2 Session-Start Injection Template
 
-This is injected once at the beginning of each session.
+This is injected once at the beginning of each session. The content comes directly from engram-lite's pre-computed MEMORY.md index files — **not** from a DB query. Each scope's MEMORY.md is read and concatenated.
 
-```xml
+> **`## Now` section exception:** The `## Now` section in the user-scope MEMORY.md is the *only* part that triggers a DB query at session start. This is a tiny targeted query (last 5 events), not a full recall scan. The section is refreshed in-place before injection.
+
+```
 <system-reminder source="engram-lite">
-<context type="session-start" memories="{{count}}" budget="{{budget}}t">
-  You have persistent memory. Here is your current context:
+[MEMORY — user]
+---
+scope: user
+updated: {{timestamp}}
+managed-by: engram-lite
+entries: {{count}}
+---
 
-  [CRITICAL]
-  - {{critical_memory_1.summary}} (confidence: {{critical_memory_1.confidence}})
-  - {{critical_memory_2.summary}} (confidence: {{critical_memory_2.confidence}})
+# Memory
 
-  [HIGH IMPORTANCE - {{domain_1}}]
-  - {{high_memory_1.summary}}
-  - {{high_memory_2.summary}}
+## You
+- [pref] {{user_preference_1}}
+- [constraint] {{user_constraint_1}}
+- [domain] {{user_domain_expertise_1}}
+→ Deep search: memory_recall("user preferences")
 
-  [HIGH IMPORTANCE - {{domain_2}}]
-  - {{high_memory_3.summary}}
+## Now
+<!-- Refreshed at session start from recent events. -->
+- [event] {{recent_event_1}}
+- [event] {{recent_event_2}}
+→ Recall anything: memory_recall("{your query}")
 
-  [RECENT]
-  - {{recent_memory_1.summary}}
+[MEMORY — project]
+---
+scope: project
+updated: {{timestamp}}
+managed-by: engram-lite
+entries: {{count}}
+---
 
-  Use memory_recall to retrieve additional context when relevant.
-  Use memory_capture to save new information worth remembering.
-  NEVER announce memory operations to the user.
-</context>
+# Memory
+
+## Project: {{project_name}}
+- [arch] {{architecture_decision_1}}
+- [decision] {{project_decision_1}}
+- [status] {{project_status_1}}
+→ Deep search: memory_recall("{{project_name}} decisions")
+
+## Now
+- [status] {{current_status}}
+→ Recall anything: memory_recall("{your query}")
+
+Full memory: memory_recall(query) | memory_search(query) | memory_graph_explore()
 </system-reminder>
 ```
 
 **Example (populated):**
 
-```xml
+```
 <system-reminder source="engram-lite">
-<context type="session-start" memories="8" budget="2000t">
-  You have persistent memory. Here is your current context:
+[MEMORY — user]
+---
+scope: user
+updated: 2026-03-03T17:44:38Z
+managed-by: engram-lite
+entries: 8
+---
 
-  [CRITICAL]
-  - User prefers TypeScript over JavaScript for all new code (confidence: 0.95)
-  - Project uses PostgreSQL 16, NOT MySQL — decided 2025-01-20 (confidence: 1.0)
-  - Never suggest `any` type in TypeScript — user considers it a code smell (confidence: 0.9)
+# Memory
 
-  [HIGH IMPORTANCE - project/backend]
-  - API follows REST conventions with /api/v2/ prefix
-  - Authentication uses OAuth2 with JWT: 15min access tokens, 7-day refresh tokens
-  - Rate limiting: token bucket algorithm, 200 req/min per user
+## You
+- [pref] Inductive writing (conclusion-first) for all output
+- [constraint] macOS, Homebrew, VS Code; avoids Docker
+- [domain] Healthcare/HIPAA familiarity
+→ Deep search: memory_recall("user preferences")
 
-  [HIGH IMPORTANCE - project/infrastructure]
-  - Deployment target is GCP Cloud Run (migrated from AWS ECS in January)
+## Now
+- [event] Designed MEMORY.md integration into engram-lite specs
+- [event] Initialized git repo for amplifier-module-engram-lite
+→ Recall anything: memory_recall("{your query}")
 
-  [RECENT]
-  - Yesterday: discussed migrating background jobs from cron to Cloud Tasks
+[MEMORY — project]
+---
+scope: project
+updated: 2026-03-03T17:44:38Z
+managed-by: engram-lite
+entries: 5
+---
 
-  Use memory_recall to retrieve additional context when relevant.
-  Use memory_capture to save new information worth remembering.
-  NEVER announce memory operations to the user.
-</context>
+# Memory
+
+## Project: engram-lite
+- [arch] SQLite-vec + dual-route retrieval (Mnemis System-1/2)
+- [decision] MCP for Claude Code tools; orchestrator:complete not response:complete
+- [status] Specs complete, implementation pending
+→ Deep search: memory_recall("engram-lite decisions")
+
+## Now
+- [status] Specs written, git initialized
+→ Recall anything: memory_recall("{your query}")
+
+Full memory: memory_recall(query) | memory_search(query) | memory_graph_explore()
 </system-reminder>
 ```
 
