@@ -1,29 +1,32 @@
-"""Vector store — sqlite-vec KNN + pure-Python fallback."""
+"""Vector store — sentence-transformers embeddings + sqlite-vec KNN."""
 
 from __future__ import annotations
 
-import hashlib
 import math
-import random
 import sqlite3
 import struct
+from typing import Any
 
-from .schema import DIMS
+# ── Embedding model (lazy-loaded singleton) ───────────────────────────────────
 
-# ── Embedding ─────────────────────────────────────────────────────────────────
+MODEL_NAME = "all-MiniLM-L6-v2"  # 384 dims, ~80MB, fully local
+_model: Any = None  # SentenceTransformer, typed as Any to avoid hard import
 
 
-def fake_embed(text: str, dims: int = DIMS) -> list[float]:
-    """
-    Deterministic fake embedding — no API needed.
-    Same text always → same vector. Good for demos.
-    Uses SHA256 of lowercased text to seed RNG.
-    """
-    seed = int(hashlib.sha256(text.lower().strip().encode()).hexdigest(), 16) % (2**31)
-    rng = random.Random(seed)
-    vec = [rng.gauss(0, 1) for _ in range(dims)]
-    mag = math.sqrt(sum(v * v for v in vec))
-    return [v / mag for v in vec] if mag > 0 else vec
+def _get_model() -> Any:
+    global _model
+    if _model is None:
+        from sentence_transformers import (
+            SentenceTransformer,  # type: ignore[import-untyped]  # noqa: PLC0415
+        )
+
+        _model = SentenceTransformer(MODEL_NAME)
+    return _model
+
+
+def embed(text: str) -> list[float]:
+    """Encode text to a normalised 384-dim vector using all-MiniLM-L6-v2."""
+    return _get_model().encode(text, normalize_embeddings=True).tolist()
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -48,7 +51,7 @@ def insert_vector(conn: sqlite3.Connection, memory_id: str, embedding: list[floa
         )
         conn.commit()
     except Exception:
-        pass  # sqlite-vec not available, skip
+        pass  # sqlite-vec not available
 
 
 def delete_vector(conn: sqlite3.Connection, memory_id: str) -> None:
@@ -66,14 +69,12 @@ def knn_search(
     domain: str | None = None,
     space: str | None = None,
 ) -> list[tuple[str, float]]:
-    """KNN via sqlite-vec. Falls back to pure-Python cosine over all vectors."""
+    """KNN via sqlite-vec. Falls back to pure-Python cosine if unavailable."""
     try:
-        # Try sqlite-vec path
         packed_query = _pack(query_vec)
         if domain or space:
-            # Filtered KNN — need a JOIN
-            where_parts = ["m.superseded_by IS NULL"]
-            params: list = []
+            where_parts: list[str] = []
+            params: list[Any] = [packed_query]
             if space:
                 where_parts.append("m.space = ?")
                 params.append(space)
@@ -81,26 +82,26 @@ def knn_search(
                 where_parts.append("m.domain LIKE ?")
                 params.append(domain + "%")
             where = " AND ".join(where_parts)
-            params_final = [packed_query] + params + [k]
+            params.append(k)
             rows = conn.execute(
                 f"""SELECT v.memory_id, vec_distance_cosine(v.embedding, ?) as dist
                     FROM memory_vectors v
                     JOIN memories m ON m.id = v.memory_id
-                    WHERE {where}
+                    {"WHERE " + where if where else ""}
                     ORDER BY dist LIMIT ?""",
-                params_final,
+                params,
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT memory_id, vec_distance_cosine(embedding, ?) as dist
                    FROM memory_vectors
                    ORDER BY dist LIMIT ?""",
-                (_pack(query_vec), k),
+                (packed_query, k),
             ).fetchall()
-        # cosine distance = 1 - similarity; convert back
+        # vec_distance_cosine returns cosine distance (0=identical, 2=opposite)
+        # convert to similarity: 1 - dist gives range [-1, 1]
         return [(r[0], 1.0 - r[1]) for r in rows]
     except Exception:
-        # Pure-Python fallback
         return _python_knn(conn, query_vec, k, domain, space)
 
 
@@ -111,25 +112,22 @@ def _python_knn(
     domain: str | None,
     space: str | None,
 ) -> list[tuple[str, float]]:
-    """Fallback: load all memories, compute cosine in Python."""
-
-    where = ["superseded_by IS NULL"]
-    params: list = []
+    """Fallback: re-embed all memories in Python and rank by cosine similarity."""
+    where: list[str] = []
+    params: list[Any] = []
     if space:
         where.append("space = ?")
         params.append(space)
     if domain:
         where.append("domain LIKE ?")
         params.append(domain + "%")
-    where_clause = " AND ".join(where)
+    clause = "WHERE " + " AND ".join(where) if where else ""
     rows = conn.execute(
-        f"SELECT id, json_extract(data, '$.content') as content FROM memories WHERE {where_clause}",
+        f"SELECT id, json_extract(data, '$.content') as content FROM memories {clause}",
         params,
     ).fetchall()
-    scored = []
-    for row in rows:
-        vec = fake_embed(row["content"] or "")
-        sim = cosine_similarity(query_vec, vec)
-        scored.append((row["id"], sim))
+    scored = [
+        (row["id"], cosine_similarity(query_vec, embed(row["content"] or ""))) for row in rows
+    ]
     scored.sort(key=lambda x: x[1], reverse=True)
     return scored[:k]

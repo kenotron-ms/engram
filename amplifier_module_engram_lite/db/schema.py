@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-DIMS = 256  # embedding dimensions (fake embeddings for demo; production uses 1536)
+DIMS = 384  # all-MiniLM-L6-v2 output dimensions
 
 DDL = """
 PRAGMA journal_mode=WAL;

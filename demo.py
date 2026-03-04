@@ -305,7 +305,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             )
 
             # Store vector
-            emb = vs.fake_embed(text)
+            emb = vs.embed(text)
             vs.insert_vector(conn, memory_id, emb)
 
             # Update MEMORY.md
@@ -332,7 +332,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
                 print(c("  Usage: recall <query>", GRAY))
                 continue
             query = rest.strip()
-            query_vec = vs.fake_embed(query)
+            query_vec = vs.embed(query)
             results = vs.knn_search(conn, query_vec, k=5)
 
             if not results:
@@ -447,7 +447,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
                     tags=tags,
                     keywords=keywords[:15],
                 )
-                emb = vs.fake_embed(content)
+                emb = vs.embed(content)
                 vs.insert_vector(conn, mid, emb)
                 entry_type = mmd.ENTRY_TYPE_MAP.get(ctype, "fact")
                 mmd.append_entry("user", entry_type, summary)
