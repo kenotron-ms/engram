@@ -345,18 +345,29 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
         # ── search ────────────────────────────────────────────────────────────
         elif cmd == "search":
             if not rest:
-                print(c("  Usage: search <keywords>", GRAY))
+                print(c("  Usage: search <keywords> [--domain DOMAIN]", GRAY))
                 continue
-            results = ms.fts_search(conn, rest.strip(), limit=5)
+            query_text, flags = parse_args_from_line(rest)
+            domain_filter = flags.get("domain")
+
+            from amplifier_module_engram_lite.tools.recall import memory_search
+
+            results = memory_search(conn, query_text, domain=domain_filter, limit=5)
             if not results:
                 print(c("  No results.", GRAY))
                 continue
             print(
-                f"\n  {c('BM25 keyword search:', BOLD, CYAN)} {c(rest, BOLD)}"
+                f"\n  {c('BM25 keyword search:', BOLD, CYAN)} {c(query_text, BOLD)}"
                 f"  {c(f'({len(results)} results)', GRAY)}"
             )
-            for i, mem in enumerate(results, 1):
-                print_memory(mem, index=i)
+            for i, r in enumerate(results, 1):
+                icon = TYPE_ICONS.get(r["content_type"], "·")
+                print(
+                    f"\n  {c(str(i), BOLD, CYAN)} {icon} {c(r['summary'], BOLD)}  {c(r['domain'], DIM)}"
+                )
+                if r.get("tags"):
+                    print(f"    {c(' '.join('#' + t for t in r['tags']), CYAN)}")
+                print(f"    {c('id: ' + r['memory_id'], GRAY)}")
             print()
 
         # ── forget ────────────────────────────────────────────────────────────
