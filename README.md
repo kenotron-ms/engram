@@ -8,26 +8,46 @@
 
 ---
 
-> ### Acknowledgements
->
-> **Dual-route retrieval architecture** adapted from
-> [Mnemis: Dual-Route Retrieval on Hierarchical Graphs for Long-Term LLM Memory](https://arxiv.org/abs/2602.15313)
-> by Zihao Tang, Xin Yu, Ziyu Xiao, Zengxuan Wen, Zelin Li, Jiaxi Zhou, Hualei Wang,
-> Haohua Wang, Haizhen Huang, Weiwei Deng, Feng Sun, and Qi Zhang
-> (arXiv:2602.15313, 2026).
->
-> **Behavioral protocol patterns** (hook injection, silent RETRIEVE-RESPOND-CAPTURE loop,
-> dual-space memory) inspired by [Engram](https://github.com/kenotron-ms/engram) —
-> a file-based memory system for AI agents.
->
-> engram-lite is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
-> only borrows design ideas.
+## Quick start
+
+### Amplifier — add the behavior to your bundle
+
+Add one line to your `bundle.md` and Amplifier handles installation automatically:
+
+```yaml
+includes:
+  - bundle: git+https://github.com/kenotron-ms/engram-lite@main#behaviors/engram-lite
+```
+
+That's it. Memory is active the next time you run `amplifier run`. The behavior wires up the hook (RETRIEVE → RESPOND → CAPTURE loop), the memory tools, and the behavioral protocol — all in one include.
+
+### Claude Code — zero install
+
+No `pip install` required. Register the MCP server and Claude Code handles the rest:
+
+```bash
+# Option A — register directly
+claude mcp add --transport stdio engram-lite -- \
+  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
+
+# Option B — copy .mcp.json into your project root
+curl -sO https://raw.githubusercontent.com/kenotron-ms/engram-lite/main/.mcp.json
+```
+
+On first use, `uvx` downloads and caches the package. Subsequent sessions start in under a second.
+
+### Initialize MEMORY.md (optional, one-time)
+
+```bash
+# Sets up ~/.engram/ and .engram/ with blank MEMORY.md files.
+uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
+```
 
 ---
 
 ## What is engram-lite?
 
-engram-lite gives AI agents persistent memory that follows you across sessions, stored locally in SQLite. Instead of starting every conversation as a blank slate, the agent remembers your preferences, past decisions, project context, and working patterns — and applies them silently, without announcing that it's doing so. Everything stays on your machine in a single database file per space, backed by [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword search. It works as both an [Amplifier](https://github.com/anthropics/amplifier) module and a Claude Code plugin.
+engram-lite gives AI agents persistent memory that follows you across sessions, stored locally in SQLite. Instead of starting every conversation as a blank slate, the agent remembers your preferences, past decisions, project context, and working patterns — and applies them silently, without announcing that it's doing so. Everything stays on your machine in a single database file per space, backed by [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword search. It works as both an [Amplifier](https://github.com/microsoft/amplifier) module and a Claude Code plugin.
 
 ## How it works
 
@@ -59,110 +79,7 @@ Retrieval uses a **dual-route architecture** adapted from the Mnemis paper:
 
 The system auto-selects the route per query, or you can force one via the `route` parameter.
 
-## Quick start
-
-### Claude Code — zero install
-
-No `pip install` required. Copy `.mcp.json` into your project root and Claude Code handles the rest:
-
-```bash
-# Option A — copy the included .mcp.json into your project
-cp /path/to/engram-lite/.mcp.json .
-
-# Option B — register directly with claude mcp
-claude mcp add --transport stdio engram-lite -- \
-  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
-
-# That's it. Start Claude Code — memory is active automatically.
-claude
-```
-
-On first use, `uvx` downloads and caches the package. Subsequent sessions start in under a second.
-
-### Amplifier
-
-```bash
-# Add the bundle to your root bundle.md — Amplifier handles installation.
-# includes:
-#   - bundle: git+https://github.com/kenotron-ms/engram-lite@main
-
-amplifier run
-```
-
-### Initialize MEMORY.md (optional, one-time)
-
-```bash
-# Sets up ~/.engram/ and .engram/ with blank MEMORY.md files.
-# Run this once to get a clean starting state.
-uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
-```
-
-## Installation
-
-### Claude Code — no install needed
-
-The `.mcp.json` in this repo uses `uvx`, so Claude Code downloads and runs the server
-automatically on first use. Nothing to install.
-
-**Option A — copy `.mcp.json` into your project:**
-
-```bash
-curl -sO https://raw.githubusercontent.com/kenotron-ms/engram-lite/main/.mcp.json
-```
-
-**Option B — register manually:**
-
-```bash
-claude mcp add --transport stdio engram-lite -- \
-  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
-```
-
-**`.mcp.json` contents (for reference):**
-
-```json
-{
-  "mcpServers": {
-    "engram-lite": {
-      "command": "uvx",
-      "args": ["--from", "git+https://github.com/kenotron-ms/engram-lite", "engram-lite-mcp"],
-      "env": {
-        "ENGRAM_USER_DB": "${HOME}/.engram/engram.db",
-        "ENGRAM_PROJECT_DB": "${PWD}/.engram/engram.db"
-      }
-    }
-  }
-}
-```
-
-### Amplifier
-
-The bundle installs itself when Amplifier runs — no separate `pip install` required.
-Add to your root `bundle.md`:
-
-```yaml
-includes:
-  - bundle: git+https://github.com/kenotron-ms/engram-lite@main
-```
-
-### CLI tools (optional, for MEMORY.md management)
-
-```bash
-# One-off via uvx — no install
-uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
-uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite status
-
-# Or install permanently
-pip install git+https://github.com/kenotron-ms/engram-lite
-```
-
-### Development
-
-```bash
-git clone https://github.com/kenotron-ms/engram-lite.git
-cd engram-lite
-uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m pytest tests/
-```
+---
 
 ## Memory tools reference
 
@@ -191,6 +108,8 @@ memory_forget(memory_id, reason?, hard?)                             → success
 memory_graph_explore(query?, node_id?)                               → graph_nodes[]
 memory_stats(space?)                                                 → stats{}
 ```
+
+---
 
 ## Configuration
 
@@ -224,6 +143,8 @@ Memories are classified into types that affect how they're stored, retrieved, an
 | `entity` | People, projects, services, tools |
 | `relationship` | Connections between entities |
 
+---
+
 ## Dual-space memory
 
 engram-lite maintains two separate SQLite databases — one private to you, one shareable with your team:
@@ -250,6 +171,8 @@ engram-lite maintains two separate SQLite databases — one private to you, one 
 
 **Privacy gate:** Content written to project space must pass the "README test" — would this be safe in a public README? PII, credentials, and private opinions are rejected or routed to user space automatically.
 
+---
+
 ## Dual-route retrieval
 
 The retrieval architecture is adapted from the [Mnemis](https://arxiv.org/abs/2602.15313) dual-route model. Where Mnemis targets large-scale enterprise memory systems, engram-lite adapts the core ideas for individual developer sessions with a local SQLite backend.
@@ -274,6 +197,8 @@ The query analyzer examines each query and selects the best route:
 | Exploratory | System-2 | "What do we know about auth?" |
 
 Results from both routes are deduplicated and re-ranked, with temporal recency, importance, and access frequency factored into the final score.
+
+---
 
 ## Privacy
 
@@ -304,58 +229,49 @@ export ENGRAM_EMBEDDING_DIMENSIONS=768
 
 With Ollama, zero data leaves your machine. Retrieval quality is slightly lower than OpenAI's models but fully functional.
 
+---
+
 ## Project structure
 
 ```
-amplifier-module-engram-lite/
-├── src/
-│   └── amplifier_module_engram_lite/
-│       ├── __init__.py
-│       ├── core/                    # Shared core library
-│       │   ├── storage.py           #   SQLite + sqlite-vec database layer
-│       │   ├── retrieval.py         #   Dual-route retrieval engine
-│       │   ├── capture.py           #   Capture pipeline (embed, classify, dedup)
-│       │   ├── graph.py             #   Hierarchical knowledge graph
-│       │   ├── embeddings.py        #   Embedding provider abstraction
-│       │   └── models.py            #   Data models and schemas
-│       ├── amplifier_hook/          # Amplifier hook module
-│       │   ├── __init__.py          #   mount() + hook handlers
-│       │   └── config.py            #   Hook configuration
-│       ├── amplifier_tool/          # Amplifier tool module
-│       │   ├── __init__.py          #   mount() + tool registration
-│       │   └── schemas.py           #   JSON schemas for tool params
-│       ├── mcp/                     # Claude Code MCP server
-│       │   └── server.py            #   MCP tool handlers (stdio transport)
-│       └── cli.py                   # CLI entry point (install-mcp, etc.)
-├── amplifier/                       # Amplifier bundle artifacts
-│   ├── behaviors/
-│   │   └── engram-lite.yaml         #   Behavior bundle definition
-│   ├── context/
-│   │   ├── memory-protocol.md       #   Behavioral protocol (session-start)
-│   │   └── tool-guide.md            #   Tool usage guide for the agent
-│   └── bundle.md                    #   Standalone root bundle
+engram-lite/
+├── behaviors/
+│   └── engram-lite.yaml             # Behavior bundle (hooks + tools + context)
+├── context/
+│   ├── memory-instructions.md       # Behavioral protocol injected at session start
+│   └── memory-awareness.md          # Tool awareness context
+├── bundle.md                        # Standalone root bundle (Amplifier)
+├── amplifier_module_engram_lite/
+│   ├── core/                        # Shared core library
+│   │   ├── storage.py               #   SQLite + sqlite-vec database layer
+│   │   ├── retrieval.py             #   Dual-route retrieval engine
+│   │   ├── capture.py               #   Capture pipeline (embed, classify, dedup)
+│   │   ├── graph.py                 #   Hierarchical knowledge graph
+│   │   ├── embeddings.py            #   Embedding provider abstraction
+│   │   └── models.py                #   Data models and schemas
+│   ├── amplifier_hook/              # Amplifier hook module
+│   │   ├── __init__.py              #   mount() + hook handlers
+│   │   └── config.py                #   Hook configuration
+│   ├── amplifier_tool/              # Amplifier tool module
+│   │   ├── __init__.py              #   mount() + tool registration
+│   │   └── schemas.py               #   JSON schemas for tool params
+│   ├── mcp/                         # Claude Code MCP server
+│   │   └── server.py                #   MCP tool handlers (stdio transport)
+│   └── cli.py                       # CLI entry point
 ├── claude-code/                     # Claude Code plugin artifacts
 │   ├── .claude-plugin/
 │   │   └── plugin.json              #   Plugin manifest
-│   ├── hooks/
-│   │   ├── session-start.sh         #   SessionStart hook
-│   │   ├── prompt-submit.sh         #   UserPromptSubmit hook
-│   │   └── stop.sh                  #   Stop (response complete) hook
 │   └── .claude/
 │       └── commands/                #   Slash commands
-│           ├── memory-recall.md
-│           ├── memory-capture.md
-│           ├── memory-stats.md
-│           └── memory-forget.md
 ├── tests/
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── PRD.md
 │   └── SPEC-*.md                    # Detailed specifications
-├── pyproject.toml
-├── README.md
-└── LICENSE
+└── pyproject.toml
 ```
+
+---
 
 ## Development
 
@@ -363,10 +279,8 @@ amplifier-module-engram-lite/
 
 ```bash
 git clone https://github.com/kenotron-ms/engram-lite.git
-cd amplifier-module-engram-lite
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+cd engram-lite
+uv venv && uv pip install -e ".[dev]"
 ```
 
 ### Run tests
@@ -400,9 +314,13 @@ The `docs/` directory contains detailed specifications for every subsystem:
 - `SPEC-PROTOCOLS.md` — Behavioral protocols
 - `SPEC-TAGGING.md` — Tag and keyword systems
 
+---
+
 ## License
 
 MIT. See [LICENSE](LICENSE) for details.
+
+---
 
 ## Citation
 
@@ -419,3 +337,20 @@ If you use engram-lite in your work, please cite the Mnemis paper that inspired 
 
 **Paper:** [arXiv:2602.15313](https://arxiv.org/abs/2602.15313) |
 **DOI:** [10.48550/arXiv.2602.15313](https://doi.org/10.48550/arXiv.2602.15313)
+
+---
+
+## Acknowledgements
+
+**Dual-route retrieval architecture** adapted from
+[Mnemis: Dual-Route Retrieval on Hierarchical Graphs for Long-Term LLM Memory](https://arxiv.org/abs/2602.15313)
+by Zihao Tang, Xin Yu, Ziyu Xiao, Zengxuan Wen, Zelin Li, Jiaxi Zhou, Hualei Wang,
+Haohua Wang, Haizhen Huang, Weiwei Deng, Feng Sun, and Qi Zhang
+(arXiv:2602.15313, 2026).
+
+**Behavioral protocol patterns** (hook injection, silent RETRIEVE-RESPOND-CAPTURE loop,
+dual-space memory) inspired by [Engram](https://github.com/kenotron-ms/engram) —
+a file-based memory system for AI agents.
+
+engram-lite is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
+only borrows design ideas.
