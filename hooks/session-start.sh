@@ -29,7 +29,6 @@ injected=0
 
 # User-scope MEMORY.md
 if [ -f "$USER_MEMORY" ]; then
-    _engram refresh-now "$USER_MEMORY" 2>/dev/null || true
     printf '[MEMORY — user]\n'
     cat "$USER_MEMORY"
     printf '\n'

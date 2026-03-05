@@ -205,20 +205,16 @@ class TestMemoryMD:
         path = mmd.initialize("project", project_dir=tmp_path, project_name="test")
         assert path.exists()
         text = path.read_text()
-        assert "## Project: test" in text
-        assert "## Now" in text
+        # Prose format — no frontmatter, no rigid section headers
+        assert "---" not in text.split("\n")[0]  # no YAML frontmatter
+        assert "## Now" not in text
+        assert "## Project:" not in text
+        assert "memory_capture" in text  # has the usage hint
 
-    def test_append_entry(self, tmp_path):
-        path = mmd.initialize("project", project_dir=tmp_path, project_name="test")
-        entry = mmd.append_entry("project", "pref", "TypeScript preferred", project_dir=tmp_path)
-        assert entry.startswith("- [pref]")
+    def test_initialize_user_creates_file(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+        path = mmd.initialize("user")
+        assert path.exists()
         text = path.read_text()
-        assert "TypeScript preferred" in text
-
-    def test_entry_count_updates_frontmatter(self, tmp_path):
-        mmd.initialize("project", project_dir=tmp_path, project_name="test")
-        mmd.append_entry("project", "fact", "fact one", project_dir=tmp_path)
-        mmd.append_entry("project", "fact", "fact two", project_dir=tmp_path)
-        path = mmd.get_path("project", tmp_path)
-        text = path.read_text()
-        assert "entries: 2" in text
+        assert "---" not in text.split("\n")[0]  # no YAML frontmatter
+        assert "memory_capture" in text

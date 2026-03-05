@@ -1,8 +1,7 @@
-"""engram-lite CLI — init, status, refresh-now, rebuild-index."""
+"""engram-lite CLI — init, status."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import click
@@ -79,34 +78,3 @@ def status() -> None:
 
     if not total:
         click.echo("No memories yet. Run: engram-lite init")
-
-
-@main.command("refresh-now")
-@click.argument("memory_md_path", type=click.Path())
-def refresh_now(memory_md_path: str) -> None:
-    """Refresh the ## Now section of a MEMORY.md file from the DB.
-
-    Called by shell hooks: engram-lite refresh-now ~/.engram/MEMORY.md
-    """
-    from amplifier_module_engram_lite.db import memory_md as mmd
-
-    path = Path(memory_md_path).expanduser()
-    if not path.exists():
-        # Silently succeed — hook calls this before checking file existence
-        sys.exit(0)
-
-    # Determine scope and project_dir from path
-    if path == Path.home() / ".engram" / "MEMORY.md":
-        scope = "user"
-        project_dir = None
-        db_path = USER_DB
-    else:
-        scope = "project" if "local" not in path.name else "local"
-        project_dir = path.parent.parent  # .engram/ -> project root
-        db_path = project_dir / ".engram" / "engram.db"
-
-    conn, _ = _get_conn(db_path)
-    mmd.refresh_now(scope, conn=conn, project_dir=project_dir)
-    # Silently exit — shell hook captures stdout for injection
-
-

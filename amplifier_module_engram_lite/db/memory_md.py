@@ -2,69 +2,24 @@
 
 from __future__ import annotations
 
-import re
-import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
 
-MAX_ENTRIES_PER_SECTION = 60
-MAX_NOW_ENTRIES = 10
-MAX_ENTRIES_TOTAL = 200
-
-IMPORTANCE_WEIGHTS = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2}
-
-ENTRY_TYPE_MAP = {
-    "preference": "pref",
-    "constraint": "constraint",
-    "decision": "decision",
-    "skill": "skill",
-    "entity": "person",
-    "event": "event",
-    "fact": "arch",
-    "relationship": "pattern",
-}
 
 TEMPLATE_USER = """\
+No memories yet. Use memory_capture() to start building your knowledge store.
+
 ---
-scope: user
-updated: {now}
-managed-by: engram-lite
-entries: 0
----
-
-# Memory
-
-## You
-<!-- Personal preferences, constraints, working style — added by memory_capture(). -->
-→ No memories yet. Use: memory_capture("I prefer...", content_type="preference")
-
-## Now
-<!-- Current session focus — refreshed at session start. -->
-→ Starting fresh.
+More on: (nothing recorded yet)
+→ memory_recall("topic") to surface it
 """
 
 TEMPLATE_PROJECT = """\
+No project memories yet. Use memory_capture(space="project") to start.
+
 ---
-scope: project
-updated: {now}
-managed-by: engram-lite
-entries: 0
----
-
-# Memory
-
-## Project: {project}
-<!-- Project decisions, architecture, status — added by memory_capture(space='project'). -->
-→ No project memories yet.
-
-## Now
-<!-- Current session focus — refreshed at session start. -->
-→ Starting fresh.
+More on: (nothing recorded yet)
+→ memory_recall("topic") to surface it
 """
-
-
-def _now() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def get_path(scope: str, project_dir: Path | None = None) -> Path:
@@ -83,159 +38,13 @@ def initialize(scope: str, project_dir: Path | None = None, project_name: str = 
     path = get_path(scope, project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
-        now = _now()
         if scope == "user":
-            path.write_text(TEMPLATE_USER.format(now=now))
+            path.write_text(TEMPLATE_USER)
         else:
-            path.write_text(TEMPLATE_PROJECT.format(now=now, project=project_name))
+            path.write_text(TEMPLATE_PROJECT)
     return path
 
 
 def read(scope: str, project_dir: Path | None = None) -> str | None:
     path = get_path(scope, project_dir)
     return path.read_text() if path.exists() else None
-
-
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Split YAML frontmatter from body. Returns ({key:val}, body)."""
-    if not text.startswith("---"):
-        return {}, text
-    end = text.index("\n---\n", 4) if "\n---\n" in text else -1
-    if end == -1:
-        return {}, text
-    fm_block = text[4:end]
-    body = text[end + 5 :]
-    fm = {}
-    for line in fm_block.splitlines():
-        if ":" in line:
-            k, _, v = line.partition(":")
-            fm[k.strip()] = v.strip()
-    return fm, body
-
-
-def _is_duplicate(content: str, entry_line: str) -> bool:
-    """Return True if an entry with the same text already exists in the file.
-
-    Compares the text portion only (ignores the ``[type]`` tag) so that
-    re-captures with a different type are also caught.
-    """
-    # entry_line looks like "- [type] some text here"
-    bracket_close = entry_line.find("]")
-    if bracket_close == -1:
-        return False
-    text_part = entry_line[bracket_close + 2 :]  # skip "] "
-    for line in content.splitlines():
-        if line.startswith("- [") and "]" in line:
-            bc = line.find("]")
-            existing_text = line[bc + 2 :]
-            if existing_text == text_part:
-                return True
-    return False
-
-
-def _trim_to_cap(content: str, cap: int = MAX_ENTRIES_TOTAL) -> str:
-    """Remove the oldest (bottom-most) entries if the total exceeds *cap*.
-
-    New entries are always inserted at the top of each section, so the
-    entries at the bottom of the file are the oldest ones.
-    """
-    lines = content.splitlines(keepends=True)
-    entry_indices = [i for i, ln in enumerate(lines) if ln.startswith("- [")]
-    if len(entry_indices) <= cap:
-        return content
-    # Drop oldest entries from the end of the list
-    to_remove = set(entry_indices[cap:])
-    return "".join(ln for i, ln in enumerate(lines) if i not in to_remove)
-
-
-def append_entry(
-    scope: str,
-    entry_type: str,
-    text: str,
-    section: str = "## You",
-    project_dir: Path | None = None,
-) -> str:
-    """Add a new entry line to MEMORY.md. Returns the entry line."""
-    path = get_path(scope, project_dir)
-    if not path.exists():
-        initialize(scope, project_dir)
-
-    content = path.read_text()
-    entry_line = f"- [{entry_type}] {text[:100]}"
-
-    # Dedup: skip if the same text already exists (any type tag)
-    if _is_duplicate(content, entry_line):
-        return entry_line
-
-    # Remove the "no memories yet" placeholder if present
-    content = re.sub(r"→ No memories yet.*\n", "", content)
-    content = re.sub(r"→ No project memories yet.*\n", "", content)
-
-    # Find the section and append after it
-    section_pattern = re.escape(section)
-    if re.search(section_pattern, content):
-        # Find insertion point: after the section header + comment
-        insert_after = re.search(section_pattern + r".*?\n(?:<!--.*?-->\n)?", content, re.DOTALL)
-        if insert_after:
-            pos = insert_after.end()
-            content = content[:pos] + entry_line + "\n" + content[pos:]
-    else:
-        content += f"\n{section}\n{entry_line}\n"
-
-    # Enforce global cap — drop oldest entries from the bottom
-    content = _trim_to_cap(content)
-
-    # Update frontmatter entry count
-    entry_count = len(re.findall(r"^- \[", content, re.MULTILINE))
-    content = re.sub(r"entries: \d+", f"entries: {entry_count}", content)
-    content = re.sub(r"updated: .*", f"updated: {_now()}", content)
-
-    path.write_text(content)
-    return entry_line
-
-
-def refresh_now(
-    scope: str,
-    conn: sqlite3.Connection | None = None,
-    project_dir: Path | None = None,
-    custom_items: list[str] | None = None,
-) -> None:
-    """Refresh the ## Now section from recent events in DB."""
-    path = get_path(scope, project_dir)
-    if not path.exists():
-        return
-
-    content = path.read_text()
-
-    # Build new Now lines
-    now_lines = ["## Now", "<!-- Refreshed at session start. -->"]
-
-    if custom_items:
-        for item in custom_items[:MAX_NOW_ENTRIES]:
-            now_lines.append(f"- [now] {item[:80]}")
-    elif conn:
-        rows = conn.execute(
-            """SELECT json_extract(data, '$.summary') as summary
-               FROM memories
-               WHERE content_type = 'event'
-               ORDER BY created_at DESC LIMIT 5"""
-        ).fetchall()
-        for row in rows:
-            now_lines.append(f"- [event] {row[0][:80]}")
-
-    now_lines.append('→ Recall anything: memory_recall("{query}")')
-
-    new_now_block = "\n".join(now_lines)
-
-    # Replace existing ## Now section
-    if "## Now" in content:
-        content = re.sub(
-            r"## Now.*?(?=\n##|\Z)",
-            new_now_block + "\n",
-            content,
-            flags=re.DOTALL,
-        )
-    else:
-        content += "\n" + new_now_block + "\n"
-
-    path.write_text(content)
