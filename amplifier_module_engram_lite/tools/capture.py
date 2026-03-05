@@ -26,6 +26,20 @@ VALID_TYPES = {
 VALID_SPACES = {"user", "project", "local"}
 VALID_IMPORTANCE = {"critical", "high", "medium", "low"}
 
+# Short labels used when building the memory_md_entry display string.
+# Moved here from memory_md.py (removed in bcdd4c7 refactor) — capture.py is
+# the only consumer.
+ENTRY_TYPE_MAP = {
+    "preference": "pref",
+    "constraint": "constraint",
+    "decision": "decision",
+    "skill": "skill",
+    "entity": "person",
+    "event": "event",
+    "fact": "arch",
+    "relationship": "pattern",
+}
+
 
 # ── Heuristic helpers ────────────────────────────────────────────────────────
 
@@ -182,10 +196,8 @@ def memory_capture(
         if best_sim >= DEDUP_SIMILARITY_THRESHOLD:
             existing_mem = ms.get_memory(conn, best_id, track_access=False)
             if existing_mem:
-                from amplifier_module_engram_lite.db import memory_md as mmd_mod
-
                 existing_summary = existing_mem["data"].get("summary", "")
-                existing_etype = mmd_mod.ENTRY_TYPE_MAP.get(existing_mem["content_type"], "fact")
+                existing_etype = ENTRY_TYPE_MAP.get(existing_mem["content_type"], "fact")
                 return {
                     "memory_id": best_id,
                     "summary": existing_summary,
@@ -229,9 +241,7 @@ def memory_capture(
     # 8. Build the suggested MEMORY.md entry format.
     #    The agent writes MEMORY.md directly via memory_index(action="write") —
     #    capture no longer touches the hot surface file.
-    from amplifier_module_engram_lite.db import memory_md as mmd
-
-    entry_type = mmd.ENTRY_TYPE_MAP.get(content_type, "fact")
+    entry_type = ENTRY_TYPE_MAP.get(content_type, "fact")
     entry_line = f"- [{entry_type}] {summary[:100]}"
 
     # 9. Return result

@@ -24,7 +24,7 @@ from amplifier_module_engram_lite.db import memory_md as mmd
 from amplifier_module_engram_lite.db import memory_store as ms
 from amplifier_module_engram_lite.db import schema as sch
 from amplifier_module_engram_lite.db import vector_store as vs
-from amplifier_module_engram_lite.tools.capture import memory_capture
+from amplifier_module_engram_lite.tools.capture import ENTRY_TYPE_MAP, memory_capture
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -96,8 +96,8 @@ def print_memory_md(scope: str, project_dir: Path | None = None) -> None:
     else:
         print(c(" .engram/MEMORY.md", BOLD, CYAN))
     print(c(f"{'─' * 60}", DIM))
-    # Print just the body (skip frontmatter)
-    _, body = mmd._parse_frontmatter(text)
+    # New format has no YAML frontmatter — use text directly
+    body = text
     for line in body.strip().splitlines():
         if line.startswith("##"):
             print(c(line, BOLD, YELLOW))
@@ -295,7 +295,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             summary = result["summary"]
             domain = result["domain"]
             entry = result["memory_md_entry"]
-            entry_type = mmd.ENTRY_TYPE_MAP.get(content_type, "fact")
+            entry_type = ENTRY_TYPE_MAP.get(content_type, "fact")
 
             print(
                 f"\n  {c('✓ Captured', GREEN, BOLD)}  {c(f'[{entry_type}] {summary[:60]}', BOLD)}"
@@ -460,9 +460,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             path = mmd.get_path("user")
             from datetime import datetime
 
-            path.write_text(
-                mmd.TEMPLATE_USER.format(now=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"))
-            )
+            path.write_text(mmd.TEMPLATE_USER)
             print(c("  ✓ All memories cleared. Fresh start!", GREEN))
 
         else:
