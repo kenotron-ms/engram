@@ -16,7 +16,7 @@ Add one line to your `bundle.md` and Amplifier handles installation automaticall
 
 ```yaml
 includes:
-  - bundle: git+https://github.com/kenotron-ms/engram-lite@main#behaviors/engram-lite
+  - bundle: git+https://github.com/kenotron-ms/engram-lite@main#subdirectory=behaviors/engram-lite.yaml
 ```
 
 That's it. Memory is active the next time you run `amplifier run`. The behavior wires up the hook (RETRIEVE → RESPOND → CAPTURE loop), the memory tools, and the behavioral protocol — all in one include.
