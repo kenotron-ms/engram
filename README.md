@@ -10,63 +10,13 @@
 
 ## Quick start
 
-### Amplifier — memory in every session (app bundle)
-
-Register engram as an **app bundle** and Amplifier automatically composes it with every session, regardless of which primary bundle you use:
-
 ```bash
-amplifier bundle add \
-  git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml \
-  --app
+curl -fsSL https://raw.githubusercontent.com/kenotron-ms/engram/main/install.sh | bash
 ```
 
-That's it. Memory is active the next time you run `amplifier run` — no per-project configuration needed. The `--app` flag is user-global: it applies to all sessions on your machine and is stored in `~/.amplifier/registry.json`.
+Memory is active the next time you run `amplifier run`. No per-project configuration needed.
 
-> **Why the behavior, not the full bundle?** The `behaviors/engram.yaml` file adds only the hook, tools, and context — it composes cleanly on top of whatever primary bundle is active. Using the full `bundle.md` would cause foundation to load twice.
-
-To verify it's registered:
-
-```bash
-amplifier bundle list
-# engram-behavior   [app bundle]   git+https://...
-```
-
-To remove it later:
-
-```bash
-amplifier bundle remove engram-behavior
-```
-
-### Amplifier — add to a specific bundle only
-
-If you only want memory in one project, add one line to your `bundle.md` instead:
-
-```yaml
-includes:
-  - bundle: git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml
-```
-
-### Claude Code — zero install
-
-No `pip install` required. Register the MCP server and Claude Code handles the rest:
-
-```bash
-# Option A — register directly
-claude mcp add --transport stdio engram -- \
-  uvx --from git+https://github.com/kenotron-ms/engram engram-mcp
-
-# Option B — copy .mcp.json into your project root
-curl -sO https://raw.githubusercontent.com/kenotron-ms/engram/main/.mcp.json
-```
-
-On first use, `uvx` downloads and caches the package. Subsequent sessions start in under a second.
-
-### Initialize MEMORY.md (optional, one-time)
-
-```bash
-# Sets up ~/.engram/ and .engram/ with blank MEMORY.md files.
-uvx --from git+https://github.com/kenotron-ms/engram engram init
-```
+To remove it later: `amplifier bundle remove engram`
 
 ---
 
