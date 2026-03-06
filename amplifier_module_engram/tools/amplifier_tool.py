@@ -23,7 +23,7 @@ async def mount(coordinator: Any, config: dict[str, Any] | None = None) -> None:
     config = config or {}
     user_db = Path(config.get("user_db", "~/.engram/engram.db")).expanduser()
 
-    from amplifier_module_engram_lite.db.schema import get_db
+    from amplifier_module_engram.db.schema import get_db
 
     conn, _ = get_db(user_db)
 
@@ -120,7 +120,7 @@ class MemoryCaptureTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.capture import memory_capture
+        from amplifier_module_engram.tools.capture import memory_capture
 
         result = memory_capture(
             self._conn,
@@ -168,7 +168,7 @@ class MemoryRecallTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.recall import memory_recall
+        from amplifier_module_engram.tools.recall import memory_recall
 
         result = memory_recall(
             self._conn,
@@ -203,7 +203,7 @@ class MemorySearchTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.recall import memory_search
+        from amplifier_module_engram.tools.recall import memory_search
 
         return _tool_result(
             True,
@@ -244,7 +244,7 @@ class MemoryUpdateTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_update
+        from amplifier_module_engram.tools.manage import memory_update
 
         return _tool_result(
             True,
@@ -281,7 +281,7 @@ class MemoryForgetTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_forget
+        from amplifier_module_engram.tools.manage import memory_forget
 
         return _tool_result(
             True,
@@ -330,7 +330,7 @@ class MemoryRelateTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_relate
+        from amplifier_module_engram.tools.manage import memory_relate
 
         return _tool_result(
             True,
@@ -365,7 +365,7 @@ class MemoryGraphExploreTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_graph_explore
+        from amplifier_module_engram.tools.manage import memory_graph_explore
 
         return _tool_result(
             True,
@@ -400,7 +400,7 @@ class MemoryStatsTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_stats
+        from amplifier_module_engram.tools.manage import memory_stats
 
         return _tool_result(True, memory_stats(self._conn, space=input.get("space")))
 
@@ -440,7 +440,7 @@ class MemoryIndexTool(_BaseTool):
         }
 
     async def execute(self, input: dict[str, Any]) -> Any:
-        from amplifier_module_engram_lite.tools.manage import memory_index
+        from amplifier_module_engram.tools.manage import memory_index
 
         return _tool_result(
             True,

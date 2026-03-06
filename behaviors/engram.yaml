@@ -1,0 +1,22 @@
+bundle:
+  name: engram-behavior
+  version: 0.2.0
+  description: Persistent vector memory — hooks + tools for Amplifier agents
+
+hooks:
+  - module: engram-hook
+    source: git+https://github.com/kenotron-ms/engram@main
+    config:
+      priority: 5
+      inject_role: system
+
+tools:
+  - module: engram-tool
+    source: git+https://github.com/kenotron-ms/engram@main
+    config:
+      max_results: 20
+
+context:
+  include:
+    - engram:context/memory-awareness.md
+    - engram:context/memory-instructions.md

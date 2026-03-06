@@ -1,15 +1,15 @@
 ---
 bundle:
-  name: engram-lite
-  version: 0.1.0
-  description: Lightweight persistent vector memory for Amplifier agents
+  name: engram
+  version: 0.2.0
+  description: Persistent vector memory for Amplifier agents
 
 includes:
   - bundle: git+https://github.com/microsoft/amplifier-foundation@main
-  - bundle: engram-lite:behaviors/engram-lite
+  - bundle: engram:behaviors/engram
 ---
 
-@engram-lite:context/memory-instructions.md
+@engram:context/memory-instructions.md
 
 ---
 

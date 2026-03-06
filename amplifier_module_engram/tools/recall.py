@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from amplifier_module_engram_lite.db import memory_store as ms
+from amplifier_module_engram.db import memory_store as ms
 
 
 def memory_recall(
@@ -37,7 +37,7 @@ def memory_recall(
       memory_id, summary, domain, tags, content_type,
       importance, confidence, score, [content, detail if include_detail]
     """
-    from amplifier_module_engram_lite.retrieval.router import route_query
+    from amplifier_module_engram.retrieval.router import route_query
 
     results = route_query(
         conn,

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from amplifier_module_engram_lite.db import memory_store as ms
-from amplifier_module_engram_lite.db import vector_store as vs
-from amplifier_module_engram_lite.retrieval.types import RetrievalResult
+from amplifier_module_engram.db import memory_store as ms
+from amplifier_module_engram.db import vector_store as vs
+from amplifier_module_engram.retrieval.types import RetrievalResult
 
 IMPORTANCE_WEIGHTS = {"critical": 1.0, "high": 0.8, "medium": 0.5, "low": 0.2}
 

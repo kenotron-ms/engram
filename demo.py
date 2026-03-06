@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-engram-lite interactive demo
+engram interactive demo
 ─────────────────────────────
 Play with persistent vector memory right in your terminal.
 No API keys needed — uses deterministic fake embeddings.
@@ -20,11 +20,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from datetime import UTC
 
-from amplifier_module_engram_lite.db import memory_md as mmd
-from amplifier_module_engram_lite.db import memory_store as ms
-from amplifier_module_engram_lite.db import schema as sch
-from amplifier_module_engram_lite.db import vector_store as vs
-from amplifier_module_engram_lite.tools.capture import ENTRY_TYPE_MAP, memory_capture
+from amplifier_module_engram.db import memory_md as mmd
+from amplifier_module_engram.db import memory_store as ms
+from amplifier_module_engram.db import schema as sch
+from amplifier_module_engram.db import vector_store as vs
+from amplifier_module_engram.tools.capture import ENTRY_TYPE_MAP, memory_capture
 
 # ── Colours ───────────────────────────────────────────────────────────────────
 R = "\033[0m"
@@ -116,7 +116,7 @@ def print_memory_md(scope: str, project_dir: Path | None = None) -> None:
 
 
 HELP = f"""
-{c("engram-lite demo commands", BOLD, CYAN)}
+{c("engram demo commands", BOLD, CYAN)}
 {hr()}
   {c("capture", BOLD)} <text>           — store a new memory
     {c("--type", DIM)} <type>           types: fact preference decision skill event entity constraint
@@ -172,11 +172,11 @@ SEED_MEMORIES = [
         ["typescript", "coding-style"],
     ),
     (
-        "engram-lite uses JSON-first SQLite schema: real columns only for indexed fields",
+        "engram uses JSON-first SQLite schema: real columns only for indexed fields",
         "fact",
-        "projects/engram-lite",
+        "projects/engram",
         "high",
-        ["sqlite", "schema", "json", "engram-lite"],
+        ["sqlite", "schema", "json", "engram"],
     ),
     (
         "HIPAA requires PHI to be encrypted at rest and in transit"
@@ -187,9 +187,9 @@ SEED_MEMORIES = [
         ["hipaa", "compliance", "phi", "encryption"],
     ),
     (
-        "Presented the engram-lite architecture design to the team",
+        "Presented the engram architecture design to the team",
         "event",
-        "projects/engram-lite",
+        "projects/engram",
         "medium",
         ["design", "architecture"],
     ),
@@ -223,7 +223,7 @@ def parse_args_from_line(line: str) -> tuple[str, dict]:
 
 def run(db_path: str = "~/.engram/demo.db") -> None:
     print(
-        f"\n{c('engram-lite', BOLD, CYAN)} {c('memory demo', BOLD)}"
+        f"\n{c('engram', BOLD, CYAN)} {c('memory demo', BOLD)}"
         f"  {c('(type help for commands)', DIM)}"
     )
     print(c(f"DB: {db_path}", GRAY))
@@ -319,7 +319,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             query_text, flags = parse_args_from_line(rest)
             route = flags.get("route", "auto")
 
-            from amplifier_module_engram_lite.retrieval.router import route_query
+            from amplifier_module_engram.retrieval.router import route_query
 
             results = route_query(conn, query_text, route=route, k=5)
 
@@ -350,7 +350,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
             query_text, flags = parse_args_from_line(rest)
             domain_filter = flags.get("domain")
 
-            from amplifier_module_engram_lite.tools.recall import memory_search
+            from amplifier_module_engram.tools.recall import memory_search
 
             results = memory_search(conn, query_text, domain=domain_filter, limit=5)
             if not results:
@@ -470,7 +470,7 @@ def run(db_path: str = "~/.engram/demo.db") -> None:
 if __name__ == "__main__":
     import argparse
 
-    p = argparse.ArgumentParser(description="engram-lite interactive demo")
+    p = argparse.ArgumentParser(description="engram interactive demo")
     p.add_argument(
         "--db",
         default="~/.engram/demo.db",

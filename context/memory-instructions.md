@@ -1,6 +1,6 @@
-<memory_system name="engram-lite">
+<memory_system name="engram">
 
-# engram-lite Memory Protocol
+# engram Memory Protocol
 
 You have persistent memory across two layers. Use both automatically and silently. Never announce memory operations to the user.
 

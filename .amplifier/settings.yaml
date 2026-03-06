@@ -1,4 +1,4 @@
 bundle:
-  active: engram-lite
+  active: engram
   added:
-    engram-lite: ./bundle.md
+    engram: ./bundle.md

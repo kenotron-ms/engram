@@ -1,4 +1,4 @@
-# engram-lite
+# engram
 
 **Persistent, vector-backed memory for AI agents.**
 
@@ -10,16 +10,41 @@
 
 ## Quick start
 
-### Amplifier — add the behavior to your bundle
+### Amplifier — memory in every session (app bundle)
 
-Add one line to your `bundle.md` and Amplifier handles installation automatically:
+Register engram as an **app bundle** and Amplifier automatically composes it with every session, regardless of which primary bundle you use:
+
+```bash
+amplifier bundle add \
+  git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml \
+  --app
+```
+
+That's it. Memory is active the next time you run `amplifier run` — no per-project configuration needed. The `--app` flag is user-global: it applies to all sessions on your machine and is stored in `~/.amplifier/registry.json`.
+
+> **Why the behavior, not the full bundle?** The `behaviors/engram.yaml` file adds only the hook, tools, and context — it composes cleanly on top of whatever primary bundle is active. Using the full `bundle.md` would cause foundation to load twice.
+
+To verify it's registered:
+
+```bash
+amplifier bundle list
+# engram-behavior   [app bundle]   git+https://...
+```
+
+To remove it later:
+
+```bash
+amplifier bundle remove engram-behavior
+```
+
+### Amplifier — add to a specific bundle only
+
+If you only want memory in one project, add one line to your `bundle.md` instead:
 
 ```yaml
 includes:
-  - bundle: git+https://github.com/kenotron-ms/engram-lite@main#subdirectory=behaviors/engram-lite.yaml
+  - bundle: git+https://github.com/kenotron-ms/engram@main#subdirectory=behaviors/engram.yaml
 ```
-
-That's it. Memory is active the next time you run `amplifier run`. The behavior wires up the hook (RETRIEVE → RESPOND → CAPTURE loop), the memory tools, and the behavioral protocol — all in one include.
 
 ### Claude Code — zero install
 
@@ -27,11 +52,11 @@ No `pip install` required. Register the MCP server and Claude Code handles the r
 
 ```bash
 # Option A — register directly
-claude mcp add --transport stdio engram-lite -- \
-  uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite-mcp
+claude mcp add --transport stdio engram -- \
+  uvx --from git+https://github.com/kenotron-ms/engram engram-mcp
 
 # Option B — copy .mcp.json into your project root
-curl -sO https://raw.githubusercontent.com/kenotron-ms/engram-lite/main/.mcp.json
+curl -sO https://raw.githubusercontent.com/kenotron-ms/engram/main/.mcp.json
 ```
 
 On first use, `uvx` downloads and caches the package. Subsequent sessions start in under a second.
@@ -40,18 +65,18 @@ On first use, `uvx` downloads and caches the package. Subsequent sessions start 
 
 ```bash
 # Sets up ~/.engram/ and .engram/ with blank MEMORY.md files.
-uvx --from git+https://github.com/kenotron-ms/engram-lite engram-lite init
+uvx --from git+https://github.com/kenotron-ms/engram engram init
 ```
 
 ---
 
-## What is engram-lite?
+## What is engram?
 
-engram-lite gives AI agents persistent memory that follows you across sessions, stored locally in SQLite. Instead of starting every conversation as a blank slate, the agent remembers your preferences, past decisions, project context, and working patterns — and applies them silently, without announcing that it's doing so. Everything stays on your machine in a single database file per space, backed by [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword search. It works as both an [Amplifier](https://github.com/microsoft/amplifier) module and a Claude Code plugin.
+engram gives AI agents persistent memory that follows you across sessions, stored locally in SQLite. Instead of starting every conversation as a blank slate, the agent remembers your preferences, past decisions, project context, and working patterns — and applies them silently, without announcing that it's doing so. Everything stays on your machine in a single database file per space, backed by [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword search. It works as both an [Amplifier](https://github.com/microsoft/amplifier) module and a Claude Code plugin.
 
 ## How it works
 
-engram-lite operates through a silent **RETRIEVE → RESPOND → CAPTURE** behavioral loop, injected automatically via platform hooks:
+engram operates through a silent **RETRIEVE → RESPOND → CAPTURE** behavioral loop, injected automatically via platform hooks:
 
 ```
   User sends prompt
@@ -147,7 +172,7 @@ Memories are classified into types that affect how they're stored, retrieved, an
 
 ## Dual-space memory
 
-engram-lite maintains two separate SQLite databases — one private to you, one shareable with your team:
+engram maintains two separate SQLite databases — one private to you, one shareable with your team:
 
 ```
 ~/.engram/                          <project-root>/.engram/
@@ -175,7 +200,7 @@ engram-lite maintains two separate SQLite databases — one private to you, one 
 
 ## Dual-route retrieval
 
-The retrieval architecture is adapted from the [Mnemis](https://arxiv.org/abs/2602.15313) dual-route model. Where Mnemis targets large-scale enterprise memory systems, engram-lite adapts the core ideas for individual developer sessions with a local SQLite backend.
+The retrieval architecture is adapted from the [Mnemis](https://arxiv.org/abs/2602.15313) dual-route model. Where Mnemis targets large-scale enterprise memory systems, engram adapts the core ideas for individual developer sessions with a local SQLite backend.
 
 ### System-1: fast similarity (vector + BM25)
 
@@ -202,7 +227,7 @@ Results from both routes are deduplicated and re-ranked, with temporal recency, 
 
 ## Privacy
 
-engram-lite is designed to keep your data local.
+engram is designed to keep your data local.
 
 **What stays on your machine:**
 - All memory content (both user and project databases)
@@ -221,7 +246,7 @@ engram-lite is designed to keep your data local.
 # Run a local embedding model
 ollama pull nomic-embed-text
 
-# Configure engram-lite to use it
+# Configure engram to use it
 export ENGRAM_EMBEDDING_PROVIDER=ollama
 export ENGRAM_EMBEDDING_MODEL=nomic-embed-text
 export ENGRAM_EMBEDDING_DIMENSIONS=768
@@ -234,9 +259,9 @@ With Ollama, zero data leaves your machine. Retrieval quality is slightly lower 
 ## Project structure
 
 ```
-engram-lite/
+engram/
 ├── behaviors/
-│   └── engram-lite.yaml             # Behavior bundle (hooks + tools + context)
+│   └── engram.yaml             # Behavior bundle (hooks + tools + context)
 ├── context/
 │   ├── memory-instructions.md       # Behavioral protocol injected at session start
 │   └── memory-awareness.md          # Tool awareness context
@@ -278,8 +303,8 @@ engram-lite/
 ### Setup
 
 ```bash
-git clone https://github.com/kenotron-ms/engram-lite.git
-cd engram-lite
+git clone https://github.com/kenotron-ms/engram.git
+cd engram
 uv venv && uv pip install -e ".[dev]"
 ```
 
@@ -324,7 +349,7 @@ MIT. See [LICENSE](LICENSE) for details.
 
 ## Citation
 
-If you use engram-lite in your work, please cite the Mnemis paper that inspired the dual-route retrieval architecture:
+If you use engram in your work, please cite the Mnemis paper that inspired the dual-route retrieval architecture:
 
 ```bibtex
 @article{tang2026mnemis,
@@ -352,5 +377,5 @@ Haohua Wang, Haizhen Huang, Weiwei Deng, Feng Sun, and Qi Zhang
 dual-space memory) inspired by [Engram](https://github.com/kenotron-ms/engram) —
 a file-based memory system for AI agents.
 
-engram-lite is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
+engram is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
 only borrows design ideas.

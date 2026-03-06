@@ -57,7 +57,7 @@ class EngramLiteHook:
 
     async def on_session_start(self, event: str, data: dict[str, Any]) -> Any:
         """Inject MEMORY.md hot context at session start."""
-        from amplifier_module_engram_lite.hooks.context_builder import (
+        from amplifier_module_engram.hooks.context_builder import (
             build_session_context,
         )
 
@@ -72,7 +72,7 @@ class EngramLiteHook:
     async def on_capture_reminder(self, event: str, data: dict[str, Any]) -> Any:
         """Inject capture reminder before each LLM call so the model processes
         pending captures from the previous turn before responding."""
-        from amplifier_module_engram_lite.hooks.context_builder import CAPTURE_REMINDER
+        from amplifier_module_engram.hooks.context_builder import CAPTURE_REMINDER
 
         return _hook_result(
             action="inject_context",
@@ -83,7 +83,7 @@ class EngramLiteHook:
 
     async def on_prompt_submit(self, event: str, data: dict[str, Any]) -> Any:
         """Inject recall nudge before each LLM call."""
-        from amplifier_module_engram_lite.hooks.context_builder import RECALL_NUDGE
+        from amplifier_module_engram.hooks.context_builder import RECALL_NUDGE
 
         return _hook_result(
             action="inject_context",

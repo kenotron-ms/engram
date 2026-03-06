@@ -184,8 +184,8 @@ def memory_capture(
     keywords = _extract_keywords(content, tags or [])
 
     # 5. Embed the content
-    from amplifier_module_engram_lite.db import memory_store as ms
-    from amplifier_module_engram_lite.db import vector_store as vs
+    from amplifier_module_engram.db import memory_store as ms
+    from amplifier_module_engram.db import vector_store as vs
 
     embedding = vs.embed(f"{content_type}: {summary}\n\n{content[:512]}")
 

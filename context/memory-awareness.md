@@ -1,4 +1,4 @@
-# engram-lite Memory
+# engram Memory
 
 You have access to persistent vector memory via 9 tools:
 

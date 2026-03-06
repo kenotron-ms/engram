@@ -4,9 +4,9 @@ import sqlite3
 
 import pytest
 
-from amplifier_module_engram_lite.db import memory_md as mmd
-from amplifier_module_engram_lite.db import memory_store as ms
-from amplifier_module_engram_lite.db import vector_store as vs
+from amplifier_module_engram.db import memory_md as mmd
+from amplifier_module_engram.db import memory_store as ms
+from amplifier_module_engram.db import vector_store as vs
 
 
 class TestSchema:
@@ -32,7 +32,7 @@ class TestSchema:
         assert row is not None
 
     def test_schema_version(self, conn):
-        from amplifier_module_engram_lite.db.schema import SCHEMA_VERSION
+        from amplifier_module_engram.db.schema import SCHEMA_VERSION
 
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
         assert ver == SCHEMA_VERSION
@@ -40,7 +40,7 @@ class TestSchema:
     def test_schema_idempotent(self, db):
         """ensure_schema is safe to call twice."""
         conn, _ = db
-        from amplifier_module_engram_lite.db.schema import ensure_schema
+        from amplifier_module_engram.db.schema import ensure_schema
 
         ensure_schema(conn)  # second call — must not raise
         count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
@@ -152,7 +152,7 @@ class TestVectorStore:
         import math
 
         vec = vs.embed("hello world")
-        from amplifier_module_engram_lite.db.schema import DIMS
+        from amplifier_module_engram.db.schema import DIMS
 
         assert len(vec) == DIMS
         # normalised: magnitude ≈ 1

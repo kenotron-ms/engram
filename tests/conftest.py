@@ -1,8 +1,8 @@
-"""Shared fixtures for engram-lite tests."""
+"""Shared fixtures for engram tests."""
 
 import pytest
 
-from amplifier_module_engram_lite.db.schema import get_memory_db
+from amplifier_module_engram.db.schema import get_memory_db
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def conn(db):
 @pytest.fixture
 def seeded(conn, tmp_path):
     """DB with 4 pre-captured memories covering different types/domains."""
-    from amplifier_module_engram_lite.tools.capture import memory_capture
+    from amplifier_module_engram.tools.capture import memory_capture
 
     ids = {}
     ids["pref"] = memory_capture(
@@ -54,9 +54,9 @@ def seeded(conn, tmp_path):
     )["memory_id"]
     ids["event"] = memory_capture(
         conn,
-        "Shipped engram-lite Wave 4 — Amplifier + Claude Code integration",
+        "Shipped engram Wave 4 — Amplifier + Claude Code integration",
         content_type="event",
-        domain="projects/engram-lite",
+        domain="projects/engram",
         tags=["milestone"],
         project_dir=tmp_path,
     )["memory_id"]

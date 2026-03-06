@@ -12,9 +12,9 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from amplifier_module_engram_lite.db import memory_md as mmd
-from amplifier_module_engram_lite.db import memory_store as ms
-from amplifier_module_engram_lite.db import vector_store as vs
+from amplifier_module_engram.db import memory_md as mmd
+from amplifier_module_engram.db import memory_store as ms
+from amplifier_module_engram.db import vector_store as vs
 
 # ── Valid relation types ──────────────────────────────────────────────────────
 

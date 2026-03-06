@@ -1,8 +1,8 @@
 """Tests for tools layer and retrieval engine."""
 
-from amplifier_module_engram_lite.retrieval.router import _detect_route
-from amplifier_module_engram_lite.tools.capture import memory_capture
-from amplifier_module_engram_lite.tools.manage import (
+from amplifier_module_engram.retrieval.router import _detect_route
+from amplifier_module_engram.tools.capture import memory_capture
+from amplifier_module_engram.tools.manage import (
     memory_forget,
     memory_graph_explore,
     memory_index,
@@ -10,7 +10,7 @@ from amplifier_module_engram_lite.tools.manage import (
     memory_stats,
     memory_update,
 )
-from amplifier_module_engram_lite.tools.recall import memory_recall, memory_search
+from amplifier_module_engram.tools.recall import memory_recall, memory_search
 
 
 class TestCapture:
@@ -65,7 +65,7 @@ class TestCapture:
         assert r["memory_md_entry"].startswith("- [")
 
     def test_capture_inserts_into_db(self, conn, tmp_path):
-        from amplifier_module_engram_lite.db import memory_store as ms
+        from amplifier_module_engram.db import memory_store as ms
 
         r = memory_capture(
             conn, "stored content", content_type="fact", domain="d/test", project_dir=tmp_path
@@ -96,7 +96,7 @@ class TestCapture:
         assert len(r["domain"]) > 0
 
     def test_capture_tags_stored(self, conn, tmp_path):
-        from amplifier_module_engram_lite.db import memory_store as ms
+        from amplifier_module_engram.db import memory_store as ms
 
         r = memory_capture(
             conn,
@@ -152,7 +152,7 @@ class TestManage:
         assert not u["success"]
 
     def test_forget_removes_memory(self, conn, tmp_path):
-        from amplifier_module_engram_lite.db import memory_store as ms
+        from amplifier_module_engram.db import memory_store as ms
 
         r = memory_capture(conn, "to delete", content_type="fact", domain="d", project_dir=tmp_path)
         f = memory_forget(conn, r["memory_id"])
@@ -321,8 +321,8 @@ class TestRouter:
         assert route == "hybrid"
 
     def test_system1_returns_results(self, seeded, conn):
-        from amplifier_module_engram_lite.db import vector_store as vs
-        from amplifier_module_engram_lite.retrieval.system1 import system1_recall
+        from amplifier_module_engram.db import vector_store as vs
+        from amplifier_module_engram.retrieval.system1 import system1_recall
 
         qvec = vs.embed("typescript preferences")
         results = system1_recall(conn, "typescript preferences", qvec, k=3)
@@ -330,13 +330,13 @@ class TestRouter:
         assert all(hasattr(r, "memory_id") for r in results)
 
     def test_system2_returns_results(self, seeded, conn):
-        from amplifier_module_engram_lite.retrieval.system2 import system2_recall
+        from amplifier_module_engram.retrieval.system2 import system2_recall
 
         results = system2_recall(conn, "professional", k=5)
         assert isinstance(results, list)
 
     def test_rrf_scoring(self):
-        from amplifier_module_engram_lite.retrieval.system1 import rrf
+        from amplifier_module_engram.retrieval.system1 import rrf
 
         scores = rrf([["a", "b", "c"], ["b", "c", "a"]])
         # "b" appears at rank 1 in list0 and rank 0 in list1 — should outscore "a" (rank 0, rank 2)
@@ -346,22 +346,22 @@ class TestRouter:
 
 class TestContextBuilder:
     def test_recall_nudge_format(self):
-        from amplifier_module_engram_lite.hooks.context_builder import RECALL_NUDGE
+        from amplifier_module_engram.hooks.context_builder import RECALL_NUDGE
 
-        assert '<system-reminder source="engram-lite">' in RECALL_NUDGE
+        assert '<system-reminder source="engram">' in RECALL_NUDGE
         assert "</system-reminder>" in RECALL_NUDGE
 
     def test_capture_reminder_format(self):
-        from amplifier_module_engram_lite.hooks.context_builder import CAPTURE_REMINDER
+        from amplifier_module_engram.hooks.context_builder import CAPTURE_REMINDER
 
         assert "memory_index" in CAPTURE_REMINDER
         assert "memory_capture" in CAPTURE_REMINDER
         assert "silent" in CAPTURE_REMINDER.lower()
 
     def test_build_session_context_returns_string(self):
-        from amplifier_module_engram_lite.hooks.context_builder import build_session_context
+        from amplifier_module_engram.hooks.context_builder import build_session_context
 
         ctx = build_session_context()
         assert isinstance(ctx, str)
-        assert '<system-reminder source="engram-lite">' in ctx
+        assert '<system-reminder source="engram">' in ctx
         assert "</system-reminder>" in ctx

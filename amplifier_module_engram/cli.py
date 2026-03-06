@@ -14,7 +14,7 @@ def _get_conn(db_path: Path):
     """Open DB, return (conn, vec_ok) or (None, False) if DB doesn't exist."""
     if not db_path.exists():
         return None, False
-    from amplifier_module_engram_lite.db.schema import get_db
+    from amplifier_module_engram.db.schema import get_db
 
     return get_db(db_path)
 
@@ -28,8 +28,8 @@ def main() -> None:
 @click.option("--project-name", default=None, help="Name for project MEMORY.md header.")
 def init(project_name: str | None) -> None:
     """Create memory directories and blank MEMORY.md files."""
-    from amplifier_module_engram_lite.db import memory_md as mmd
-    from amplifier_module_engram_lite.db.schema import get_db
+    from amplifier_module_engram.db import memory_md as mmd
+    from amplifier_module_engram.db.schema import get_db
 
     # User scope
     user_path = mmd.initialize("user")
@@ -55,7 +55,7 @@ def init(project_name: str | None) -> None:
 @main.command()
 def status() -> None:
     """Show memory statistics."""
-    from amplifier_module_engram_lite.db import memory_store as ms
+    from amplifier_module_engram.db import memory_store as ms
 
     total = 0
     for label, db_path in [("user", USER_DB), ("project", PROJECT_DB)]:

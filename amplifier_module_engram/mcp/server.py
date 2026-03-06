@@ -30,7 +30,7 @@ def _get_conn():
     global _conn
     if _conn is None:
         db_path = Path(os.environ.get("ENGRAM_USER_DB", "~/.engram/engram.db")).expanduser()
-        from amplifier_module_engram_lite.db.schema import get_db
+        from amplifier_module_engram.db.schema import get_db
 
         _conn, _ = get_db(db_path)
     return _conn
@@ -66,7 +66,7 @@ def memory_capture(
     Call silently after learning something worth retaining — a preference, decision, fact,
     constraint, or pattern. Never announce this call to the user.
     """
-    from amplifier_module_engram_lite.tools.capture import memory_capture as _capture
+    from amplifier_module_engram.tools.capture import memory_capture as _capture
 
     return _capture(
         _get_conn(),
@@ -96,7 +96,7 @@ def memory_recall(
     project history, people, or recurring topics. Returns ranked memories with relevance scores.
     Use memory_search instead when you need exact keyword or ID lookup.
     """
-    from amplifier_module_engram_lite.tools.recall import memory_recall as _recall
+    from amplifier_module_engram.tools.recall import memory_recall as _recall
 
     return _recall(
         _get_conn(),
@@ -120,7 +120,7 @@ def memory_search(
     Prefer this over memory_recall when you have an exact term, name, ID, or specific phrase.
     Faster but purely lexical — use memory_recall for semantic or concept-based queries.
     """
-    from amplifier_module_engram_lite.tools.recall import memory_search as _search
+    from amplifier_module_engram.tools.recall import memory_search as _search
 
     return _search(_get_conn(), query, domain=domain, limit=limit)
 
@@ -142,7 +142,7 @@ def memory_update(
     was revised, or details need clarifying. Updating content triggers re-embedding so
     semantic search stays accurate. Use memory_forget for memories that are simply wrong.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_update as _update
+    from amplifier_module_engram.tools.manage import memory_update as _update
 
     return _update(
         _get_conn(),
@@ -165,7 +165,7 @@ def memory_forget(
     For memories that are merely outdated or need corrections, prefer memory_update.
     Deletion is irreversible — provide a reason to keep the action auditable.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_forget as _forget
+    from amplifier_module_engram.tools.manage import memory_forget as _forget
 
     return _forget(_get_conn(), memory_id, reason=reason)
 
@@ -187,7 +187,7 @@ def memory_relate(
     context that caused it, a constraint to the project it applies to, or a fact that
     supersedes an older one. Enables graph-based navigation via memory_graph_explore.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_relate as _relate
+    from amplifier_module_engram.tools.manage import memory_relate as _relate
 
     return _relate(_get_conn(), from_id, to_id, relation_type, strength=strength)
 
@@ -204,7 +204,7 @@ def memory_graph_explore(
     clusters of related memories. Complements memory_recall for structured exploration
     when you want to understand the shape of what's stored rather than retrieve content.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_graph_explore as _explore
+    from amplifier_module_engram.tools.manage import memory_graph_explore as _explore
 
     return _explore(_get_conn(), query=query, node_id=node_id, depth=depth)
 
@@ -218,7 +218,7 @@ def memory_stats(
     Returns total memory count, breakdown by type and domain, and per-space usage.
     Useful for understanding what has been captured and where memory is concentrated.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_stats as _stats
+    from amplifier_module_engram.tools.manage import memory_stats as _stats
 
     return _stats(_get_conn(), space=space)
 
@@ -240,7 +240,7 @@ def memory_index(
     write it to update with fresh LLM-authored prose, or check status to see file paths.
     Use action='write' with a complete rewrite — do not append or patch.
     """
-    from amplifier_module_engram_lite.tools.manage import memory_index as _index
+    from amplifier_module_engram.tools.manage import memory_index as _index
 
     return _index(_get_conn(), action=action, scope=scope, content=content)
 
