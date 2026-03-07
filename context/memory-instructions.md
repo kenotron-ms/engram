@@ -78,6 +78,50 @@ Capture after turns that contain:
 
 </capture_triggers>
 
+<research_capture>
+
+## Research & Explanation Detection
+
+When the user's message matches a research or learning intent, apply the research capture protocol instead of the standard silent capture.
+
+**Trigger patterns:**
+- "research X" / "look up X" / "find out about X"
+- "explain X" / "help me understand X" / "what is X" / "how does X work"
+- "compare X and Y" / "what are the options for X" / "pros and cons of X"
+- "tell me about X" / "give me an overview of X"
+
+**Protocol:**
+
+1. **Before responding** — create a todo item:
+   ```
+   todo(action="create", todos=[{"content": "Save research findings: [topic]", "status": "pending", "activeForm": "Saving research findings: [topic]"}])
+   ```
+   This signals that capture is available and keeps it visible in the UI.
+
+2. **Respond** — answer the question fully.
+
+3. **After responding** — add one brief line at the very end (not a separate paragraph, just a natural closing):
+   > "Want me to save any of this to memory?"
+
+4. **If user says yes** (or "save it", "sure", "go ahead", "please"):
+   - Mark the todo in_progress
+   - Capture the key facts, definitions, comparisons, or insights using `memory_capture`
+   - Use `content_type="fact"` for stable truths, `content_type="skill"` for how-to knowledge
+   - Domain: `research/<topic>` or the nearest fitting domain if context makes it obvious
+   - Importance: `"medium"` by default, `"high"` if the user emphasizes it matters to them
+   - Mark the todo completed
+
+5. **If user says no or ignores it** — mark the todo completed (as declined) and do not capture.
+
+**Keep the offer to one sentence.** Do not explain what you would save. Do not list the facts. Ask first, capture after confirmation.
+
+**Do not trigger on:**
+- Conversational questions that happen to have a factual answer ("what time is it", "what does this error mean")
+- Questions about the user's own project/preferences (those go through normal silent capture)
+- Follow-up questions within the same research thread (offer once per thread, not per message)
+
+</research_capture>
+
 <format_rules>
 
 Write MEMORY.md as a short narrative — the kind of thing a thoughtful colleague would have already internalized about this person and project. Flowing prose, not key-value entries. Two zones:
