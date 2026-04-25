@@ -252,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires interactive keychain access; run with --include-ignored in a GUI session"]
     fn test_store_and_retrieve_key() {
         let salt = [42u8; 16];
         let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
@@ -271,6 +272,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires interactive keychain access; run with --include-ignored in a GUI session"]
     fn test_delete_key_then_retrieve_fails() {
         let salt = [42u8; 16];
         let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
