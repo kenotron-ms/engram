@@ -512,8 +512,12 @@ fn dir_size_bytes(path: &Path) -> u64 {
     total
 }
 
-/// Index vault markdown files for full-text search with content-hash deduplication.
+/// Index vault markdown files for full-text search with content-hash deduplication,
+/// and embed all files into the sqlite-vec vector store.
 fn run_index(vault_path: Option<PathBuf>, force: bool) {
+    use engram_search::embedder::Embedder;
+    use engram_search::vector::VectorIndex;
+
     let vault_path = vault_path.unwrap_or_else(default_vault_path);
 
     if !vault_path.exists() {
@@ -522,12 +526,22 @@ fn run_index(vault_path: Option<PathBuf>, force: bool) {
     }
 
     let search_dir = default_search_dir();
+    let vectors_path = default_vectors_path();
 
-    // --force: wipe the search index so every file is reindexed from scratch.
-    if force && search_dir.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&search_dir) {
-            eprintln!("Failed to wipe search index: {}", e);
-            std::process::exit(1);
+    // --force: wipe both the search index and vector store so every file is
+    // reindexed from scratch.
+    if force {
+        if search_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&search_dir) {
+                eprintln!("Failed to wipe search index: {}", e);
+                std::process::exit(1);
+            }
+        }
+        if vectors_path.exists() {
+            if let Err(e) = std::fs::remove_file(&vectors_path) {
+                eprintln!("Failed to wipe vector store: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 
@@ -549,12 +563,73 @@ fn run_index(vault_path: Option<PathBuf>, force: bool) {
         }
     };
 
+    // Vector embedding pass ────────────────────────────────────────────────
+    // The vector store has no content-hash deduplication, so we always delete
+    // and rebuild it to avoid accumulating duplicate vectors across runs.
+    if vectors_path.exists() {
+        if let Err(e) = std::fs::remove_file(&vectors_path) {
+            eprintln!("Failed to clear vector store: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    println!("Loading embedding model (first run downloads ~90MB)...");
+
+    let embedder = match Embedder::new() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Failed to load embedding model: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let vector_index = match VectorIndex::open(&vectors_path) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Failed to open vector store: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let files = match vault.list_markdown() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to list vault files: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut vectors_indexed = 0usize;
+
+    for rel_path in &files {
+        let content = match vault.read(rel_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("  \u{2717} {}: read failed \u{2014} {}", rel_path, e);
+                continue;
+            }
+        };
+        let embedding = match embedder.embed(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("  \u{2717} {}: embed failed \u{2014} {}", rel_path, e);
+                continue;
+            }
+        };
+        if let Err(e) = vector_index.insert(rel_path, &embedding) {
+            eprintln!("  \u{2717} {}: vector insert failed \u{2014} {}", rel_path, e);
+        } else {
+            vectors_indexed += 1;
+        }
+    }
+
     let index_size_mb = dir_size_bytes(&search_dir) as f64 / 1_048_576.0;
 
-    println!("{}", "─".repeat(41));
+    println!("{}", "\u{2500}".repeat(41));
     println!("Indexed:    {}", stats.indexed);
     println!("Skipped:    {}", stats.skipped);
     println!("Total:      {}", stats.total);
+    println!("Vectors:    {}", vectors_indexed);
     println!(
         "Index path: {} ({:.2} MB)",
         search_dir.display(),

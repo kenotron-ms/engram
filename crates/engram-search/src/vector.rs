@@ -23,9 +23,14 @@ impl VectorIndex {
     pub fn open(path: &Path) -> Result<Self, SearchError> {
         // Register the sqlite-vec extension exactly once for this process.
         INIT_SQLITE_VEC.call_once(|| unsafe {
-            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                sqlite_vec::sqlite3_vec_init as *const (),
-            )));
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute::<
+                *const (),
+                unsafe extern "C" fn(
+                    *mut rusqlite::ffi::sqlite3,
+                    *mut *const i8,
+                    *const rusqlite::ffi::sqlite3_api_routines,
+                ) -> i32,
+            >(sqlite_vec::sqlite3_vec_init as *const ())));
         });
 
         let conn = Connection::open(path).map_err(|e| SearchError::Db(e.to_string()))?;
