@@ -1,9 +1,12 @@
 // store.rs — SQLCipher-backed memory store
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::crypto::EngramKey;
 
@@ -38,6 +41,37 @@ pub enum StoreError {
 
     #[error("record not found")]
     NotFound,
+}
+
+/// A single memory record stored in the encrypted database.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Memory {
+    pub id: String,
+    pub entity: String,
+    pub attribute: String,
+    pub value: String,
+    pub source: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Memory {
+    /// Create a new `Memory` with a UUID v4 id and millisecond timestamps.
+    pub fn new(entity: &str, attribute: &str, value: &str, source: Option<&str>) -> Self {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_millis() as i64;
+        Memory {
+            id: Uuid::new_v4().to_string(),
+            entity: entity.to_string(),
+            attribute: attribute.to_string(),
+            value: value.to_string(),
+            source: source.map(str::to_string),
+            created_at: now_ms,
+            updated_at: now_ms,
+        }
+    }
 }
 
 /// In-process handle to the encrypted SQLite memory store.
@@ -82,6 +116,89 @@ impl MemoryStore {
             |row| row.get(0),
         )?;
         Ok(count as u64)
+    }
+
+    /// Insert a `Memory` record into the database.
+    pub fn insert(&self, memory: &Memory) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO memories (id, entity, attribute, value, source, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                memory.id,
+                memory.entity,
+                memory.attribute,
+                memory.value,
+                memory.source,
+                memory.created_at,
+                memory.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve a `Memory` by id, returning `None` if no row exists.
+    pub fn get(&self, id: &str) -> Result<Option<Memory>, StoreError> {
+        let result = self.conn.query_row(
+            "SELECT id, entity, attribute, value, source, created_at, updated_at
+             FROM memories WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(Memory {
+                    id: row.get(0)?,
+                    entity: row.get(1)?,
+                    attribute: row.get(2)?,
+                    value: row.get(3)?,
+                    source: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                })
+            },
+        );
+        match result {
+            Ok(memory) => Ok(Some(memory)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StoreError::Db(e)),
+        }
+    }
+
+    /// Update the `value` field and `updated_at` timestamp of a memory.
+    pub fn update_value(&self, id: &str, value: &str) -> Result<(), StoreError> {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_millis() as i64;
+        self.conn.execute(
+            "UPDATE memories SET value = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![value, now_ms, id],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a memory by id.
+    pub fn delete(&self, id: &str) -> Result<(), StoreError> {
+        self.conn.execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Return all memories for a given entity, ordered by `updated_at` DESC.
+    pub fn find_by_entity(&self, entity: &str) -> Result<Vec<Memory>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entity, attribute, value, source, created_at, updated_at
+             FROM memories WHERE entity = ?1 ORDER BY updated_at DESC",
+        )?;
+        let memories = stmt.query_map([entity], |row| {
+            Ok(Memory {
+                id: row.get(0)?,
+                entity: row.get(1)?,
+                attribute: row.get(2)?,
+                value: row.get(3)?,
+                source: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })?;
+        let result: Result<Vec<Memory>, rusqlite::Error> = memories.collect();
+        Ok(result?)
     }
 }
 
@@ -142,5 +259,85 @@ mod tests {
             EngramKey::derive(b"wrongpassword", &[0u8; 16]).expect("key derivation failed");
         // Opening with wrong key — result doesn't need to be Ok, just shouldn't panic.
         let _result = MemoryStore::open(&db_path, &wrong_key);
+    }
+
+    #[test]
+    fn test_insert_and_get_memory() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", Some("2026-04-14 transcript"));
+        store.insert(&memory).expect("insert failed");
+        let got = store.get(&memory.id).expect("get failed");
+        assert!(got.is_some(), "expected memory to be returned");
+        let got = got.unwrap();
+        assert_eq!(got.id, memory.id);
+        assert_eq!(got.entity, "Sofia");
+        assert_eq!(got.attribute, "dietary");
+        assert_eq!(got.value, "vegetarian");
+        assert_eq!(got.source, Some("2026-04-14 transcript".to_string()));
+        assert_eq!(got.created_at, memory.created_at);
+        assert_eq!(got.updated_at, memory.updated_at);
+    }
+
+    #[test]
+    fn test_get_missing_returns_none() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let result = store.get("nonexistent-id").expect("get failed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_update_value_changes_value_and_timestamp() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "role", "engineer", None);
+        store.insert(&memory).expect("insert failed");
+        let original_updated_at = memory.updated_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        store.update_value(&memory.id, "senior engineer").expect("update_value failed");
+        let got = store.get(&memory.id).expect("get failed").expect("memory missing after update");
+        assert_eq!(got.value, "senior engineer");
+        assert!(got.updated_at >= original_updated_at);
+    }
+
+    #[test]
+    fn test_delete_removes_memory() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", None);
+        store.insert(&memory).expect("insert failed");
+        store.delete(&memory.id).expect("delete failed");
+        let result = store.get(&memory.id).expect("get after delete failed");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_by_entity_returns_all_for_entity() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let m1 = Memory::new("Sofia", "dietary", "vegetarian", None);
+        let m2 = Memory::new("Sofia", "role", "engineer", None);
+        let m3 = Memory::new("Chris", "role", "manager", None);
+        store.insert(&m1).expect("insert m1 failed");
+        store.insert(&m2).expect("insert m2 failed");
+        store.insert(&m3).expect("insert m3 failed");
+        let results = store.find_by_entity("Sofia").expect("find_by_entity failed");
+        assert_eq!(results.len(), 2);
+        for m in &results {
+            assert_eq!(m.entity, "Sofia");
+        }
+    }
+
+    #[test]
+    fn test_record_count_reflects_inserts() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        assert_eq!(store.record_count().expect("count failed"), 0);
+        let m1 = Memory::new("Sofia", "dietary", "vegetarian", None);
+        let m2 = Memory::new("Chris", "role", "manager", None);
+        store.insert(&m1).expect("insert m1 failed");
+        store.insert(&m2).expect("insert m2 failed");
+        assert_eq!(store.record_count().expect("count failed"), 2);
     }
 }
