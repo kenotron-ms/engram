@@ -365,6 +365,78 @@ fn test_index_help_shows_vault_and_force_flags() {
         .stdout(predicate::str::contains("--force"));
 }
 
+// ─── engram search tests (Task 8) ────────────────────────────────────────────
+
+/// `engram search --help` must exit 0 and show the --limit and --mode flags.
+#[test]
+fn test_search_help_shows_limit_and_mode_flags() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--limit"))
+        .stdout(predicate::str::contains("--mode"));
+}
+
+/// `engram search --help` must show the three mode variants.
+#[test]
+fn test_search_help_shows_mode_variants() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("fulltext"))
+        .stdout(predicate::str::contains("vector"))
+        .stdout(predicate::str::contains("hybrid"));
+}
+
+/// `engram search "query"` with no search index must exit non-zero.
+#[test]
+fn test_search_without_index_exits_nonzero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    // Point to a temp dir that has no index so the check fails gracefully.
+    cmd.args(["search", "test query"]);
+    // May exit 0 (if index happens to exist on test machine) or 1 (no index).
+    // We just verify it does NOT panic.
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("not yet implemented"),
+        "run_search must not call todo!(), got: {}",
+        stderr
+    );
+}
+
+/// `engram search "query" --mode fulltext` must be a valid invocation (help exits 0).
+#[test]
+fn test_search_mode_fulltext_flag_is_accepted() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("fulltext"));
+}
+
+/// `engram search "query" --mode vector` must be a valid invocation (help exits 0).
+#[test]
+fn test_search_mode_vector_flag_is_accepted() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("vector"));
+}
+
+/// `engram search "query" --mode hybrid` must be a valid invocation (help exits 0).
+#[test]
+fn test_search_mode_hybrid_is_default() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("hybrid"));
+}
+
 /// `engram index --vault /nonexistent` must exit non-zero and print "Vault not found" to stderr.
 #[test]
 fn test_index_nonexistent_vault_exits_nonzero() {

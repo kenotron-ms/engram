@@ -1,10 +1,22 @@
 // engram-cli — Personal memory assistant CLI
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
+use engram_search::{SearchResult, SearchSource};
 use std::path::{Path, PathBuf};
+
+/// Search mode for the `search` subcommand.
+#[derive(Clone, Debug, ValueEnum)]
+enum SearchMode {
+    /// Full-text BM25 search only
+    Fulltext,
+    /// Semantic vector (KNN) search only
+    Vector,
+    /// Hybrid search: RRF merge of full-text and vector results
+    Hybrid,
+}
 
 /// Personal memory assistant
 #[derive(Parser)]
@@ -37,6 +49,17 @@ enum Commands {
         /// Force a full reindex by wiping the search index first
         #[arg(long)]
         force: bool,
+    },
+    /// Search the indexed vault
+    Search {
+        /// Query string
+        query: String,
+        /// Maximum number of results to return
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Search mode: fulltext (BM25), vector (KNN), or hybrid (RRF merge)
+        #[arg(long, default_value = "hybrid")]
+        mode: SearchMode,
     },
 }
 
@@ -123,6 +146,7 @@ fn main() {
         },
         Commands::Sync { backend } => run_sync(backend.as_deref()),
         Commands::Index { vault, force } => run_index(vault, force),
+        Commands::Search { query, limit, mode } => run_search(&query, limit, &mode),
     }
 }
 
@@ -461,6 +485,13 @@ fn default_search_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".engram/search"))
 }
 
+/// Returns the default vector index path: `~/.engram/vectors.db`.
+fn default_vectors_path() -> PathBuf {
+    UserDirs::new()
+        .map(|u| u.home_dir().join(".engram/vectors.db"))
+        .unwrap_or_else(|| PathBuf::from(".engram/vectors.db"))
+}
+
 /// Recursively compute the total size in bytes of all files under `path`.
 /// Returns 0 if `path` does not exist or cannot be read.
 fn dir_size_bytes(path: &Path) -> u64 {
@@ -529,6 +560,131 @@ fn run_index(vault_path: Option<PathBuf>, force: bool) {
         search_dir.display(),
         index_size_mb
     );
+}
+
+/// Search the indexed vault using the specified mode.
+fn run_search(query: &str, limit: usize, mode: &SearchMode) {
+    use engram_search::embedder::Embedder;
+    use engram_search::hybrid::HybridSearch;
+    use engram_search::vector::VectorIndex;
+
+    let search_dir = default_search_dir();
+
+    // Check search index exists.
+    if !search_dir.join("meta.json").exists() {
+        eprintln!("Search index not found. Run: engram index");
+        std::process::exit(1);
+    }
+
+    let indexer = match TantivyIndexer::open(&search_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("Failed to open search index: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let results: Vec<SearchResult> = match mode {
+        SearchMode::Fulltext => match indexer.search(query, limit) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Full-text search failed: {}", e);
+                std::process::exit(1);
+            }
+        },
+
+        SearchMode::Vector => {
+            let vectors_path = default_vectors_path();
+            let vector_index = match VectorIndex::open(&vectors_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Failed to open vector index: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let embedder = match Embedder::new() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("Failed to load embedder: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let embedding = match embedder.embed(query) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Failed to embed query: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let knn = match vector_index.knn_search(&embedding, limit) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Vector search failed: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            knn.into_iter()
+                .map(|(path, dist)| SearchResult {
+                    path,
+                    snippet: String::new(),
+                    score: 1.0 - dist,
+                    source: SearchSource::Vector,
+                })
+                .collect()
+        }
+
+        SearchMode::Hybrid => {
+            let vectors_path = default_vectors_path();
+            let vector_index = match VectorIndex::open(&vectors_path) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Failed to open vector index: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let embedder = match Embedder::new() {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("Failed to load embedder: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let hybrid = HybridSearch::new(indexer, vector_index, embedder);
+            match hybrid.search(query, limit) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Hybrid search failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    // Print results header.
+    let mode_label = match mode {
+        SearchMode::Fulltext => "fulltext",
+        SearchMode::Vector => "vector",
+        SearchMode::Hybrid => "hybrid",
+    };
+    println!(
+        "Results for \"{}\" [{}] — {} found",
+        query,
+        mode_label,
+        results.len()
+    );
+    println!("{}", "─".repeat(49));
+
+    if results.is_empty() {
+        println!("No results found.");
+        return;
+    }
+
+    for result in results {
+        println!("{} (score: {:.2})", result.path, result.score);
+        if !result.snippet.is_empty() {
+            println!("  {}", result.snippet);
+        }
+    }
 }
 
 /// Print vault state, memory store stats, and keyring status to stdout.
@@ -614,6 +770,17 @@ mod tests {
         assert!(
             path_str.ends_with(".engram/search"),
             "search dir should end with .engram/search, got: {}",
+            path_str
+        );
+    }
+
+    #[test]
+    fn test_default_vectors_path_ends_with_engram_vectors_db() {
+        let path = default_vectors_path();
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".engram/vectors.db"),
+            "vectors path should end with .engram/vectors.db, got: {}",
             path_str
         );
     }
