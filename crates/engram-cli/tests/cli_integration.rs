@@ -497,6 +497,33 @@ fn test_observe_nonexistent_path_exits_nonzero() {
     cmd.assert().failure();
 }
 
+// ─── engram load tests (Task 6) ───────────────────────────────────────────────
+
+/// `engram load --help` must exit 0 and show the --format flag.
+#[test]
+fn test_load_help_shows_format_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["load", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--format"));
+}
+
+/// `engram load` must NOT panic with todo!() — it must either succeed or fail gracefully.
+#[test]
+fn test_load_does_not_panic() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("load");
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // A todo!() panic produces "not yet implemented" on stderr
+    assert!(
+        !stderr.contains("not yet implemented"),
+        "run_load must not call todo!(), got stderr: {}",
+        stderr
+    );
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]

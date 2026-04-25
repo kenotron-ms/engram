@@ -73,6 +73,12 @@ enum Commands {
         #[arg(long, env = "ANTHROPIC_API_KEY")]
         api_key: Option<String>,
     },
+    /// Load recent memories as an AI context block
+    Load {
+        /// Output format (context)
+        #[arg(long, default_value = "context")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -163,6 +169,7 @@ fn main() {
             session_path,
             api_key,
         } => run_observe(&session_path, api_key.as_deref()),
+        Commands::Load { format } => run_load(&format),
     }
 }
 
@@ -774,6 +781,39 @@ fn run_search(query: &str, limit: usize, mode: &SearchMode) {
         println!("{} (score: {:.2})", result.path, result.score);
         if !result.snippet.is_empty() {
             println!("  {}", result.snippet);
+        }
+    }
+}
+
+/// Load recent memories and emit them as a context block to stdout.
+fn run_load(format: &str) {
+    let store_path = default_store_path();
+    let key_store = KeyStore::new("engram");
+    let key = match key_store.retrieve() {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("No vault key found. Run: engram init");
+            std::process::exit(1);
+        }
+    };
+    let store = match MemoryStore::open(&store_path, &key) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to open memory store: {}", e);
+            std::process::exit(1);
+        }
+    };
+    match format {
+        "context" => match load::load_context(&store) {
+            Ok(output) => print!("{}", output),
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        },
+        other => {
+            eprintln!("Unknown format: {}. Valid formats: context", other);
+            std::process::exit(1);
         }
     }
 }
