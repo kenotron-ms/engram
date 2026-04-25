@@ -90,7 +90,9 @@ pub fn encrypt(key: &EngramKey, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError
 /// and 16-byte authentication tag.
 pub fn decrypt(key: &EngramKey, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if data.len() < 24 {
-        return Err(CryptoError::Decryption("data too short to contain nonce".to_string()));
+        return Err(CryptoError::Decryption(
+            "data too short to contain nonce".to_string(),
+        ));
     }
     let (nonce_bytes, ciphertext) = data.split_at(24);
     let nonce = XNonce::from_slice(nonce_bytes);
@@ -182,7 +184,10 @@ mod tests {
         let salt = [1u8; 16];
         let key1 = EngramKey::derive(b"password_one", &salt).expect("derive failed");
         let key2 = EngramKey::derive(b"password_two", &salt).expect("derive failed");
-        assert_ne!(key1, key2, "different passwords must produce different keys");
+        assert_ne!(
+            key1, key2,
+            "different passwords must produce different keys"
+        );
     }
 
     #[test]
@@ -208,7 +213,10 @@ mod tests {
         let plaintext = b"hello, engram!";
         let ciphertext = encrypt(&key, plaintext).expect("encrypt failed");
         let decrypted = decrypt(&key, &ciphertext).expect("decrypt failed");
-        assert_eq!(decrypted, plaintext, "decrypted must equal original plaintext");
+        assert_eq!(
+            decrypted, plaintext,
+            "decrypted must equal original plaintext"
+        );
     }
 
     #[test]
@@ -259,7 +267,11 @@ mod tests {
         let store = KeyStore::new("engram-test-suite");
         store.store(&key).expect("store failed");
         let retrieved = store.retrieve().expect("retrieve failed");
-        assert_eq!(key.as_bytes(), retrieved.as_bytes(), "retrieved key must equal stored key");
+        assert_eq!(
+            key.as_bytes(),
+            retrieved.as_bytes(),
+            "retrieved key must equal stored key"
+        );
         store.delete().ok(); // cleanup
     }
 
@@ -268,7 +280,10 @@ mod tests {
         let store = KeyStore::new("engram-test-nonexistent-9999");
         store.delete().ok(); // ensure clean state
         let result = store.retrieve();
-        assert!(result.is_err(), "retrieving a missing key must return an error");
+        assert!(
+            result.is_err(),
+            "retrieving a missing key must return an error"
+        );
     }
 
     #[test]
@@ -280,6 +295,9 @@ mod tests {
         store.store(&key).expect("store failed");
         store.delete().expect("delete failed");
         let result = store.retrieve();
-        assert!(result.is_err(), "retrieving after delete must return an error");
+        assert!(
+            result.is_err(),
+            "retrieving after delete must return an error"
+        );
     }
 }

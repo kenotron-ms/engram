@@ -21,8 +21,8 @@ fn test_full_memory_round_trip() {
 
     // Derive key from a randomly-generated salt
     let salt = generate_salt();
-    let key = EngramKey::derive(b"integration-test-password", &salt)
-        .expect("key derivation failed");
+    let key =
+        EngramKey::derive(b"integration-test-password", &salt).expect("key derivation failed");
 
     let store = MemoryStore::open(&db_path, &key).expect("open store failed");
 
@@ -53,8 +53,8 @@ fn test_full_memory_round_trip() {
 #[test]
 fn test_encrypt_vault_file_round_trip() {
     let salt = [7u8; 16];
-    let key = EngramKey::derive(b"integration-test-password", &salt)
-        .expect("key derivation failed");
+    let key =
+        EngramKey::derive(b"integration-test-password", &salt).expect("key derivation failed");
 
     let plaintext = "# People/Sofia.md\n\nSofia is vegetarian.\n";
     let plaintext_bytes = plaintext.as_bytes();
@@ -109,8 +109,7 @@ fn test_vault_reads_after_write() {
         .read("People/Sofia.md")
         .expect("read People/Sofia.md failed");
     assert_eq!(
-        content,
-        "# Sofia\n\nSofia is vegetarian.",
+        content, "# Sofia\n\nSofia is vegetarian.",
         "People/Sofia.md content should match what was written"
     );
 }

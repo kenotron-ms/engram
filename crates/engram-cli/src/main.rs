@@ -62,36 +62,25 @@ fn run_status() {
 
     if store_path.exists() {
         match &key_result {
-            Ok(key) => {
-                match MemoryStore::open(&store_path, key) {
-                    Ok(store) => {
-                        let count = store.record_count().unwrap_or(0);
-                        println!(
-                            "Memory store: {} (present, {} records)",
-                            store_path.display(),
-                            count
-                        );
-                    }
-                    Err(_) => {
-                        println!(
-                            "Memory store: {} (wrong key)",
-                            store_path.display()
-                        );
-                    }
+            Ok(key) => match MemoryStore::open(&store_path, key) {
+                Ok(store) => {
+                    let count = store.record_count().unwrap_or(0);
+                    println!(
+                        "Memory store: {} (present, {} records)",
+                        store_path.display(),
+                        count
+                    );
                 }
-            }
+                Err(_) => {
+                    println!("Memory store: {} (wrong key)", store_path.display());
+                }
+            },
             Err(_) => {
-                println!(
-                    "Memory store: {} (present, no key)",
-                    store_path.display()
-                );
+                println!("Memory store: {} (present, no key)", store_path.display());
             }
         }
     } else {
-        println!(
-            "Memory store: {} (not initialized)",
-            store_path.display()
-        );
+        println!("Memory store: {} (not initialized)", store_path.display());
     }
 
     // ── Keyring status ──────────────────────────────────────────────────────

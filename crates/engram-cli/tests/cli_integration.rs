@@ -31,9 +31,9 @@ fn test_status_output_starts_with_separator() {
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.arg("status");
     // The separator uses the Unicode box-drawing character ─ (U+2500)
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("─────────────────────────────────────────"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "─────────────────────────────────────────",
+    ));
 }
 
 /// Fresh system (no vault, no store, no key) must print the "not set" states.
@@ -74,7 +74,10 @@ fn test_status_memory_store_state_is_printed() {
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("records)") || stdout.contains("not initialized") || stdout.contains("wrong key") || stdout.contains("no key"),
+        stdout.contains("records)")
+            || stdout.contains("not initialized")
+            || stdout.contains("wrong key")
+            || stdout.contains("no key"),
         "Memory store line must contain a recognisable status, got: {}",
         stdout
     );

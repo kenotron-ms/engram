@@ -107,11 +107,9 @@ impl MemoryStore {
 
     /// Return the total number of rows in the `memories` table.
     pub fn record_count(&self) -> Result<u64, StoreError> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM memories",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))?;
         Ok(count as u64)
     }
 
@@ -159,7 +157,8 @@ impl MemoryStore {
 
     /// Delete a memory by id.
     pub fn delete(&self, id: &str) -> Result<(), StoreError> {
-        self.conn.execute("DELETE FROM memories WHERE id = ?1", [id])?;
+        self.conn
+            .execute("DELETE FROM memories WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -188,11 +187,11 @@ fn now_ms() -> i64 {
 /// Deserialise a `memories` table row into a [`Memory`] struct.
 fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
     Ok(Memory {
-        id:         row.get(0)?,
-        entity:     row.get(1)?,
-        attribute:  row.get(2)?,
-        value:      row.get(3)?,
-        source:     row.get(4)?,
+        id: row.get(0)?,
+        entity: row.get(1)?,
+        attribute: row.get(2)?,
+        value: row.get(3)?,
+        source: row.get(4)?,
         created_at: row.get(5)?,
         updated_at: row.get(6)?,
     })
@@ -261,7 +260,12 @@ mod tests {
     fn test_insert_and_get_memory() {
         let (_dir, db_path) = temp_store();
         let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
-        let memory = Memory::new("Sofia", "dietary", "vegetarian", Some("2026-04-14 transcript"));
+        let memory = Memory::new(
+            "Sofia",
+            "dietary",
+            "vegetarian",
+            Some("2026-04-14 transcript"),
+        );
         store.insert(&memory).expect("insert failed");
         let got = store.get(&memory.id).expect("get failed");
         assert!(got.is_some(), "expected memory to be returned");
@@ -291,8 +295,13 @@ mod tests {
         store.insert(&memory).expect("insert failed");
         let original_updated_at = memory.updated_at;
         std::thread::sleep(std::time::Duration::from_millis(10));
-        store.update_value(&memory.id, "senior engineer").expect("update_value failed");
-        let got = store.get(&memory.id).expect("get failed").expect("memory missing after update");
+        store
+            .update_value(&memory.id, "senior engineer")
+            .expect("update_value failed");
+        let got = store
+            .get(&memory.id)
+            .expect("get failed")
+            .expect("memory missing after update");
         assert_eq!(got.value, "senior engineer");
         assert!(got.updated_at >= original_updated_at);
     }
@@ -318,7 +327,9 @@ mod tests {
         store.insert(&m1).expect("insert m1 failed");
         store.insert(&m2).expect("insert m2 failed");
         store.insert(&m3).expect("insert m3 failed");
-        let results = store.find_by_entity("Sofia").expect("find_by_entity failed");
+        let results = store
+            .find_by_entity("Sofia")
+            .expect("find_by_entity failed");
         assert_eq!(results.len(), 2);
         for m in &results {
             assert_eq!(m.entity, "Sofia");

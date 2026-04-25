@@ -150,7 +150,9 @@ mod tests {
     #[test]
     fn test_write_creates_parent_directories() {
         let (vault, _dir) = make_vault();
-        vault.write("deep/nested/dir/file.md", "nested content").unwrap();
+        vault
+            .write("deep/nested/dir/file.md", "nested content")
+            .unwrap();
         let content = vault.read("deep/nested/dir/file.md").unwrap();
         assert_eq!(content, "nested content");
     }
