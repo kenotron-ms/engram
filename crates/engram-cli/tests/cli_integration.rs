@@ -352,6 +352,29 @@ fn test_sync_does_not_panic() {
     );
 }
 
+// ─── engram index tests (Task 7) ───────────────────────────────────────────────
+
+/// `engram index --help` must exit 0 and show the --vault and --force flags.
+#[test]
+fn test_index_help_shows_vault_and_force_flags() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["index", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--vault"))
+        .stdout(predicate::str::contains("--force"));
+}
+
+/// `engram index --vault /nonexistent` must exit non-zero and print "Vault not found" to stderr.
+#[test]
+fn test_index_nonexistent_vault_exits_nonzero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["index", "--vault", "/tmp/nonexistent_engram_vault_xyz_abc"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("Vault not found"));
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
