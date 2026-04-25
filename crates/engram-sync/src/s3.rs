@@ -9,6 +9,7 @@ use crate::backend::{SyncBackend, SyncError};
 
 pub struct S3Backend {
     pub(crate) store: Arc<dyn ObjectStore>,
+    #[allow(dead_code)] // exposed pub(crate) for integration test introspection
     pub(crate) bucket: String,
 }
 
