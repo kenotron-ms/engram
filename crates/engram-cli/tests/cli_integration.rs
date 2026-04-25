@@ -544,6 +544,46 @@ fn test_mcp_help_exits_successfully() {
     cmd.assert().success();
 }
 
+// ─── engram install / uninstall / doctor tests (Task 10) ─────────────────────
+
+/// `engram install --help` must exit 0 (install command is registered).
+#[test]
+fn test_install_help_exits_successfully() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["install", "--help"]);
+    cmd.assert().success();
+}
+
+/// `engram doctor` must exit 0 and print the "engram doctor" header.
+#[test]
+fn test_doctor_exits_zero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("doctor");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("engram doctor"));
+}
+
+/// `engram doctor` output must contain a "Vault:" status line.
+#[test]
+fn test_doctor_shows_vault_line() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("doctor");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("Vault:"));
+}
+
+/// `engram doctor` output must contain a "Store:" status line.
+#[test]
+fn test_doctor_shows_store_line() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("doctor");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("Store:"));
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]

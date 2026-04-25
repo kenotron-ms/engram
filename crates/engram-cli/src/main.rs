@@ -1,6 +1,7 @@
 // engram-cli — Personal memory assistant CLI
 
 mod daemon;
+mod install;
 mod load;
 mod mcp;
 mod observe;
@@ -85,6 +86,12 @@ enum Commands {
     Daemon,
     /// Start the MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
     Mcp,
+    /// Install the engram daemon as a system service
+    Install,
+    /// Uninstall the engram daemon system service
+    Uninstall,
+    /// Run diagnostics on the engram installation
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -178,6 +185,9 @@ fn main() {
         Commands::Load { format } => run_load(&format),
         Commands::Daemon => run_daemon(),
         Commands::Mcp => run_mcp(),
+        Commands::Install => run_install(),
+        Commands::Uninstall => run_uninstall(),
+        Commands::Doctor => run_doctor(),
     }
 }
 
@@ -1007,6 +1017,88 @@ fn run_daemon() {
                 eprintln!("Error processing {}: {}", transcript_path.display(), e);
             }
         }
+    }
+}
+
+/// Install the engram daemon as a system service.
+fn run_install() {
+    match install::install_service() {
+        Ok(()) => println!("\u{2713} engram daemon service installed"),
+        Err(e) => {
+            eprintln!("Failed to install service: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Uninstall the engram daemon system service.
+fn run_uninstall() {
+    match install::uninstall_service() {
+        Ok(()) => println!("\u{2713} engram daemon service uninstalled"),
+        Err(e) => {
+            eprintln!("Failed to uninstall service: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Print diagnostic information about the engram installation.
+fn run_doctor() {
+    let sep = "\u{2500}".repeat(41);
+
+    println!("{}", sep);
+    println!("engram doctor");
+    println!("{}", sep);
+
+    // ── Binary path ────────────────────────────────────────────────────────────
+    let binary_path = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    println!("Binary:            {}", binary_path);
+
+    // ── Vault status ───────────────────────────────────────────────────────────
+    let vault_path = default_vault_path();
+    if vault_path.exists() {
+        let vault = Vault::new(&vault_path);
+        let count = vault.list_markdown().map(|f| f.len()).unwrap_or(0);
+        println!("Vault:             {} ({} files)", vault_path.display(), count);
+    } else {
+        println!("Vault:             {} (NOT FOUND)", vault_path.display());
+    }
+
+    // ── Key status ─────────────────────────────────────────────────────────────
+    let key_store = KeyStore::new("engram");
+    let key_result = key_store.retrieve();
+    match &key_result {
+        Ok(_) => println!("Key:               present \u{2713}"),
+        Err(_) => println!("Key:               not set"),
+    }
+
+    // ── Memory store status ────────────────────────────────────────────────────
+    let store_path = default_store_path();
+    if store_path.exists() {
+        match &key_result {
+            Ok(key) => match MemoryStore::open(&store_path, key) {
+                Ok(store) => {
+                    let count = store.record_count().unwrap_or(0);
+                    println!(
+                        "Store:             {} ({} records)",
+                        store_path.display(),
+                        count
+                    );
+                }
+                Err(_) => println!("Store:             {} (wrong key)", store_path.display()),
+            },
+            Err(_) => println!("Store:             {} (no key)", store_path.display()),
+        }
+    } else {
+        println!("Store:             {} (not initialized)", store_path.display());
+    }
+
+    // ── ANTHROPIC_API_KEY status ───────────────────────────────────────────────
+    match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(v) if !v.is_empty() => println!("ANTHROPIC_API_KEY: set \u{2713}"),
+        _ => println!("ANTHROPIC_API_KEY: not set"),
     }
 }
 
