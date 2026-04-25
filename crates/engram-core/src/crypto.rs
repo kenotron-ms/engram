@@ -274,7 +274,7 @@ mod tests {
     fn test_delete_key_then_retrieve_fails() {
         let salt = [42u8; 16];
         let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
-        let store = KeyStore::new("engram-test-suite");
+        let store = KeyStore::new("engram-test-delete-verify");
         store.store(&key).expect("store failed");
         store.delete().expect("delete failed");
         let result = store.retrieve();
