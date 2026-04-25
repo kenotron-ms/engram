@@ -80,6 +80,8 @@ enum Commands {
         #[arg(long, default_value = "context")]
         format: String,
     },
+    /// Watch ~/.amplifier/projects for new session transcripts and process them automatically
+    Daemon,
 }
 
 #[derive(Subcommand)]
@@ -171,6 +173,7 @@ fn main() {
             api_key,
         } => run_observe(&session_path, api_key.as_deref()),
         Commands::Load { format } => run_load(&format),
+        Commands::Daemon => run_daemon(),
     }
 }
 
@@ -895,6 +898,87 @@ fn search_index_status(search_dir: &Path) -> String {
         }
     } else {
         "Search index: not built (run: engram index)".to_string()
+    }
+}
+
+/// Watch `~/.amplifier/projects` for session transcript changes and process them automatically.
+fn run_daemon() {
+    use daemon::watch_sessions;
+    use std::sync::mpsc;
+
+    // Retrieve vault encryption key from the system keyring.
+    let key_store = KeyStore::new("engram");
+    let key = match key_store.retrieve() {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("No vault key found. Run: engram init");
+            std::process::exit(1);
+        }
+    };
+
+    // Determine the watch directory: ~/.amplifier/projects
+    let watch_dir = UserDirs::new()
+        .map(|u| u.home_dir().join(".amplifier/projects"))
+        .unwrap_or_else(|| PathBuf::from(".amplifier/projects"));
+
+    // Create the watch directory if it doesn't exist.
+    if let Err(e) = std::fs::create_dir_all(&watch_dir) {
+        eprintln!("Failed to create watch directory {}: {}", watch_dir.display(), e);
+        std::process::exit(1);
+    }
+
+    // Read ANTHROPIC_API_KEY from environment; warn if empty but continue.
+    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+    if api_key.is_empty() {
+        eprintln!("Warning: ANTHROPIC_API_KEY is not set. Transcripts will be watched but facts cannot be extracted.");
+    }
+
+    // Create channel for transcript path events.
+    let (tx, rx) = mpsc::channel::<PathBuf>();
+
+    // Start the file watcher.
+    let _watcher = match watch_sessions(&watch_dir, tx) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("Failed to start file watcher: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("engram daemon started. Watching: {}", watch_dir.display());
+
+    // Open the memory store for writing extracted facts.
+    let store_path = default_store_path();
+    let store = match MemoryStore::open(&store_path, &key) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to open memory store: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Block on the channel receiver; process each transcript as it arrives.
+    for transcript_path in rx {
+        eprintln!("Processing: {}", transcript_path.display());
+
+        if api_key.is_empty() {
+            eprintln!("Skipping fact extraction: ANTHROPIC_API_KEY is not set.");
+            continue;
+        }
+
+        match observe::observe_session(&transcript_path, &store, &api_key) {
+            Ok(stats) => {
+                eprintln!(
+                    "Extracted: {} facts, Written: {} facts from {}",
+                    stats.facts_extracted,
+                    stats.facts_written,
+                    stats.session_path
+                );
+            }
+            Err(e) => {
+                eprintln!("Error processing {}: {}", transcript_path.display(), e);
+            }
+        }
     }
 }
 

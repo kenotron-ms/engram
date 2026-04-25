@@ -524,6 +524,16 @@ fn test_load_does_not_panic() {
     );
 }
 
+// ─── engram daemon tests (Task 8 CLI) ──────────────────────────────────────────
+
+/// `engram daemon --help` must exit 0 (daemon command is registered).
+#[test]
+fn test_daemon_help_exits_successfully() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["daemon", "--help"]);
+    cmd.assert().success();
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
