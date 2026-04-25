@@ -201,6 +201,56 @@ pub fn parse_transcript(path: &Path) -> Result<Vec<TranscriptTurn>, ObserveError
     Ok(turns)
 }
 
+
+/// Write a slice of extracted facts to the memory store.
+///
+/// For each fact, creates a [`Memory`] with entity/attribute/value and an optional source
+/// (set to `None` when the fact's source field is empty).
+/// Inserts each memory into `store`, silently skipping any that fail to insert.
+/// Returns the count of successfully written memories.
+pub fn write_facts_to_store(
+    facts: &[ExtractedFact],
+    store: &engram_core::store::MemoryStore,
+) -> usize {
+    let mut count = 0;
+    for fact in facts {
+        let source = if fact.source.is_empty() {
+            None
+        } else {
+            Some(fact.source.as_str())
+        };
+        let memory = engram_core::store::Memory::new(
+            &fact.entity,
+            &fact.attribute,
+            &fact.value,
+            source,
+        );
+        if store.insert(&memory).is_ok() {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Orchestrate a full observe session: parse transcript → extract facts → write to store.
+///
+/// Returns [`ObserveStats`] containing the number of facts extracted and written.
+pub fn observe_session(
+    session_path: &Path,
+    store: &engram_core::store::MemoryStore,
+    api_key: &str,
+) -> Result<ObserveStats, ObserveError> {
+    let turns = parse_transcript(session_path)?;
+    let facts = extract_facts(&turns, api_key)?;
+    let facts_extracted = facts.len();
+    let facts_written = write_facts_to_store(&facts, store);
+    Ok(ObserveStats {
+        facts_extracted,
+        facts_written,
+        session_path: session_path.to_string_lossy().to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +428,48 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].content, "Valid");
         assert_eq!(turns[1].content, "Also valid");
+    }
+
+    #[test]
+    fn test_write_facts_to_store() {
+        use engram_core::crypto::EngramKey;
+        use engram_core::store::MemoryStore;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("create temp dir failed");
+        let db_path = dir.path().join("test.db");
+        let key =
+            EngramKey::derive(b"testpassword", &[0u8; 16]).expect("key derivation failed");
+        let store = MemoryStore::open(&db_path, &key).expect("open store failed");
+
+        let facts = vec![
+            ExtractedFact {
+                entity: "Sofia".to_string(),
+                attribute: "dietary".to_string(),
+                value: "vegetarian".to_string(),
+                source: "user".to_string(),
+            },
+            ExtractedFact {
+                entity: "Chris".to_string(),
+                attribute: "preference".to_string(),
+                value: "small components".to_string(),
+                source: "user".to_string(),
+            },
+        ];
+
+        let written = write_facts_to_store(&facts, &store);
+        assert_eq!(written, 2, "expected 2 facts written successfully");
+
+        let count = store.record_count().expect("record_count failed");
+        assert_eq!(count, 2, "expected 2 records in the store");
+
+        let sofia_records = store
+            .find_by_entity("Sofia")
+            .expect("find_by_entity failed");
+        assert_eq!(sofia_records.len(), 1, "expected 1 record for Sofia");
+        let sofia = &sofia_records[0];
+        assert_eq!(sofia.attribute, "dietary");
+        assert_eq!(sofia.value, "vegetarian");
+        assert_eq!(sofia.source, Some("user".to_string()));
     }
 }
