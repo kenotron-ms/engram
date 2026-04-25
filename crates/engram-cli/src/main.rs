@@ -687,6 +687,37 @@ fn run_search(query: &str, limit: usize, mode: &SearchMode) {
     }
 }
 
+/// Build the search index status line for the given `search_dir`.
+///
+/// Returns one of:
+/// - `"Search index: {path} ({count} files indexed, {size:.1} MB)"` when the
+///   index exists and can be opened.
+/// - `"Search index: {path} (error opening index)"` when meta.json exists but
+///   `TantivyIndexer::open` fails.
+/// - `"Search index: not built (run: engram index)"` when meta.json is absent.
+fn search_index_status(search_dir: &Path) -> String {
+    if search_dir.join("meta.json").exists() {
+        match TantivyIndexer::open(search_dir) {
+            Ok(indexer) => {
+                let count = indexer.indexed_doc_count();
+                let size_mb = dir_size_bytes(search_dir) as f64 / 1_048_576.0;
+                format!(
+                    "Search index: {} ({} files indexed, {:.1} MB)",
+                    search_dir.display(),
+                    count,
+                    size_mb
+                )
+            }
+            Err(_) => format!(
+                "Search index: {} (error opening index)",
+                search_dir.display()
+            ),
+        }
+    } else {
+        "Search index: not built (run: engram index)".to_string()
+    }
+}
+
 /// Print vault state, memory store stats, and keyring status to stdout.
 fn run_status() {
     // Separator line
@@ -729,6 +760,10 @@ fn run_status() {
     } else {
         println!("Memory store: {} (not initialized)", store_path.display());
     }
+
+    // ── Search index status ───────────────────────────────────────────────────
+    let search_dir = default_search_dir();
+    println!("{}", search_index_status(&search_dir));
 
     // ── Keyring status ────────────────────────────────────────────────────────
     match key_result {
@@ -815,5 +850,69 @@ mod tests {
         fs::write(dir.path().join("top.txt"), b"xy").unwrap(); // 2 bytes
         let size = dir_size_bytes(dir.path());
         assert_eq!(size, 5, "should recurse into subdirs (3 + 2 = 5)");
+    }
+
+    // ── search_index_status unit tests ────────────────────────────────────────
+
+    /// When no meta.json exists the status must be the "not built" message.
+    #[test]
+    fn test_search_index_status_not_built_when_no_meta_json() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        // Nothing created in `dir`, so meta.json is absent.
+        let status = search_index_status(dir.path());
+        assert_eq!(
+            status,
+            "Search index: not built (run: engram index)",
+            "should return the 'not built' message when meta.json is absent"
+        );
+    }
+
+    /// When a valid index exists the status must include the doc count and MB size.
+    #[test]
+    fn test_search_index_status_shows_doc_count_when_index_exists() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        // Create a real index with one document.
+        {
+            let mut indexer = TantivyIndexer::open(dir.path()).unwrap();
+            indexer
+                .index_file("note.md", "hello world content for status test")
+                .unwrap();
+        } // indexer (and its IndexWriter lock) is dropped here
+
+        let status = search_index_status(dir.path());
+        assert!(
+            status.starts_with("Search index:"),
+            "status should start with 'Search index:', got: {}",
+            status
+        );
+        assert!(
+            status.contains("files indexed"),
+            "status should contain 'files indexed', got: {}",
+            status
+        );
+        assert!(
+            status.contains("MB"),
+            "status should contain the MB size, got: {}",
+            status
+        );
+    }
+
+    /// The "not built" path must not mention a directory path.
+    #[test]
+    fn test_search_index_status_not_built_has_no_path() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let status = search_index_status(dir.path());
+        // The "not built" message must not embed the search dir path.
+        assert!(
+            !status.contains(dir.path().to_str().unwrap()),
+            "not-built message must not include the search dir path, got: {}",
+            status
+        );
     }
 }

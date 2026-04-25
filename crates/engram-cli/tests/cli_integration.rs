@@ -437,6 +437,35 @@ fn test_search_mode_hybrid_is_default() {
         .stdout(predicate::str::contains("hybrid"));
 }
 
+// ─── Search index status tests (Task 9) ───────────────────────────────────────
+
+/// `engram status` must include a "Search index:" status line.
+#[test]
+fn test_status_shows_search_index_label() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("status");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Search index:"));
+}
+
+/// `engram status` search index line must show either index stats or the
+/// "not built" message (or "error opening index" if the index is corrupt).
+#[test]
+fn test_status_search_index_shows_valid_state() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("status");
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("files indexed")
+            || stdout.contains("not built (run: engram index)")
+            || stdout.contains("error opening index"),
+        "Search index line must show stats, 'not built (run: engram index)', or 'error opening index', got: {}",
+        stdout
+    );
+}
+
 /// `engram index --vault /nonexistent` must exit non-zero and print "Vault not found" to stderr.
 #[test]
 fn test_index_nonexistent_vault_exits_nonzero() {
