@@ -1,0 +1,4 @@
+// UniFFI UDL - engram-core FFI interface definition
+// This is a placeholder; FFI bindings will be expanded in subsequent tasks.
+
+namespace engram_core {};

@@ -44,6 +44,13 @@ pub fn generate_salt() -> [u8; 16] {
 }
 
 impl EngramKey {
+    /// Construct an `EngramKey` directly from 32 bytes of raw key material.
+    ///
+    /// Used by the FFI layer to round-trip key bytes across the ABI boundary.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        EngramKey(bytes)
+    }
+
     /// Derive an `EngramKey` from a password and salt using Argon2id.
     ///
     /// Parameters: 64 MiB memory, 3 iterations, 1 thread, 32-byte output.
@@ -284,6 +291,13 @@ mod tests {
             result.is_err(),
             "retrieving a missing key must return an error"
         );
+    }
+
+    #[test]
+    fn test_from_bytes_round_trips_with_as_bytes() {
+        let original_bytes = [42u8; 32];
+        let key = EngramKey::from_bytes(original_bytes);
+        assert_eq!(key.as_bytes(), &original_bytes);
     }
 
     #[test]
