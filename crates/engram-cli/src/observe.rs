@@ -203,7 +203,6 @@ pub fn parse_transcript(path: &Path) -> Result<Vec<TranscriptTurn>, ObserveError
     Ok(turns)
 }
 
-
 /// Write a slice of extracted facts to the memory store.
 ///
 /// For each fact, creates a [`Memory`] with entity/attribute/value and an optional source
@@ -221,12 +220,8 @@ pub fn write_facts_to_store(
         } else {
             Some(fact.source.as_str())
         };
-        let memory = engram_core::store::Memory::new(
-            &fact.entity,
-            &fact.attribute,
-            &fact.value,
-            source,
-        );
+        let memory =
+            engram_core::store::Memory::new(&fact.entity, &fact.attribute, &fact.value, source);
         if store.insert(&memory).is_ok() {
             count += 1;
         }
@@ -350,7 +345,9 @@ mod tests {
         let facts = extract_facts(&turns, &api_key).unwrap();
         assert!(!facts.is_empty(), "Expected at least one fact");
         assert!(
-            facts.iter().any(|f| f.entity.to_lowercase().contains("sofia")),
+            facts
+                .iter()
+                .any(|f| f.entity.to_lowercase().contains("sofia")),
             "Expected a fact about Sofia"
         );
     }
@@ -393,12 +390,8 @@ mod tests {
     #[test]
     fn test_parse_transcript_skips_blank_lines() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"{{"role":"user","content":"First","timestamp":1}}"#
-        )
-        .unwrap();
-        writeln!(file, "").unwrap(); // blank line
+        writeln!(file, r#"{{"role":"user","content":"First","timestamp":1}}"#).unwrap();
+        writeln!(file).unwrap(); // blank line
         writeln!(
             file,
             r#"{{"role":"assistant","content":"Second","timestamp":2}}"#
@@ -414,11 +407,7 @@ mod tests {
     #[test]
     fn test_parse_transcript_skips_malformed_lines() {
         let mut file = NamedTempFile::new().unwrap();
-        writeln!(
-            file,
-            r#"{{"role":"user","content":"Valid","timestamp":1}}"#
-        )
-        .unwrap();
+        writeln!(file, r#"{{"role":"user","content":"Valid","timestamp":1}}"#).unwrap();
         writeln!(file, "this is not json at all").unwrap(); // malformed
         writeln!(
             file,
@@ -440,8 +429,7 @@ mod tests {
 
         let dir = TempDir::new().expect("create temp dir failed");
         let db_path = dir.path().join("test.db");
-        let key =
-            EngramKey::derive(b"testpassword", &[0u8; 16]).expect("key derivation failed");
+        let key = EngramKey::derive(b"testpassword", &[0u8; 16]).expect("key derivation failed");
         let store = MemoryStore::open(&db_path, &key).expect("open store failed");
 
         let facts = vec![

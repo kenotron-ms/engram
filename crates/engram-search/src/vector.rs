@@ -30,7 +30,9 @@ impl VectorIndex {
                     *mut *const i8,
                     *const rusqlite::ffi::sqlite3_api_routines,
                 ) -> i32,
-            >(sqlite_vec::sqlite3_vec_init as *const ())));
+            >(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
         });
 
         let conn = Connection::open(path).map_err(|e| SearchError::Db(e.to_string()))?;

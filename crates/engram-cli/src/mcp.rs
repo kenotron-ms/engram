@@ -264,8 +264,15 @@ mod tests {
     #[test]
     fn test_tools_list_returns_three_tools() {
         let tools = tool_definitions();
-        let arr = tools.as_array().expect("tool_definitions should return a JSON array");
-        assert_eq!(arr.len(), 3, "should return exactly 3 tools, got {}", arr.len());
+        let arr = tools
+            .as_array()
+            .expect("tool_definitions should return a JSON array");
+        assert_eq!(
+            arr.len(),
+            3,
+            "should return exactly 3 tools, got {}",
+            arr.len()
+        );
 
         let names: Vec<&str> = arr
             .iter()

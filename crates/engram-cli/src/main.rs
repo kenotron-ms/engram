@@ -690,7 +690,10 @@ fn run_index(vault_path: Option<PathBuf>, force: bool) {
             }
         };
         if let Err(e) = vector_index.insert(rel_path, &embedding) {
-            eprintln!("  \u{2717} {}: vector insert failed \u{2014} {}", rel_path, e);
+            eprintln!(
+                "  \u{2717} {}: vector insert failed \u{2014} {}",
+                rel_path, e
+            );
         } else {
             vectors_indexed += 1;
         }
@@ -969,7 +972,11 @@ fn run_daemon() {
 
     // Create the watch directory if it doesn't exist.
     if let Err(e) = std::fs::create_dir_all(&watch_dir) {
-        eprintln!("Failed to create watch directory {}: {}", watch_dir.display(), e);
+        eprintln!(
+            "Failed to create watch directory {}: {}",
+            watch_dir.display(),
+            e
+        );
         std::process::exit(1);
     }
 
@@ -1016,9 +1023,7 @@ fn run_daemon() {
             Ok(stats) => {
                 eprintln!(
                     "Extracted: {} facts, Written: {} facts from {}",
-                    stats.facts_extracted,
-                    stats.facts_written,
-                    stats.session_path
+                    stats.facts_extracted, stats.facts_written, stats.session_path
                 );
             }
             Err(e) => {
@@ -1069,7 +1074,11 @@ fn run_doctor() {
     if vault_path.exists() {
         let vault = Vault::new(&vault_path);
         let count = vault.list_markdown().map(|f| f.len()).unwrap_or(0);
-        println!("Vault:             {} ({} files)", vault_path.display(), count);
+        println!(
+            "Vault:             {} ({} files)",
+            vault_path.display(),
+            count
+        );
     } else {
         println!("Vault:             {} (NOT FOUND)", vault_path.display());
     }
@@ -1100,7 +1109,10 @@ fn run_doctor() {
             Err(_) => println!("Store:             {} (no key)", store_path.display()),
         }
     } else {
-        println!("Store:             {} (not initialized)", store_path.display());
+        println!(
+            "Store:             {} (not initialized)",
+            store_path.display()
+        );
     }
 
     // ── ANTHROPIC_API_KEY status ───────────────────────────────────────────────

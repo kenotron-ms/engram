@@ -52,25 +52,25 @@ pub fn watch_sessions(
     std::thread::spawn(move || {
         let mut last_seen: HashMap<PathBuf, Instant> = HashMap::new();
 
-        for result in notify_rx {
-            if let Ok(event) = result {
-                if is_transcript_event(&event) {
-                    let now = Instant::now();
-                    for path in &event.paths {
-                        if path
-                            .file_name()
-                            .map(|n| n == "transcript.jsonl")
-                            .unwrap_or(false)
-                        {
-                            let should_send = last_seen
-                                .get(path)
-                                .map(|last| now.duration_since(*last) >= DEBOUNCE_DURATION)
-                                .unwrap_or(true);
+        // Re-check per-path: is_transcript_event guarantees at least one transcript path,
+        // but a single notify event can carry multiple paths — only send transcript paths.
+        for event in notify_rx.into_iter().flatten() {
+            if is_transcript_event(&event) {
+                let now = Instant::now();
+                for path in &event.paths {
+                    if path
+                        .file_name()
+                        .map(|n| n == "transcript.jsonl")
+                        .unwrap_or(false)
+                    {
+                        let should_send = last_seen
+                            .get(path)
+                            .map(|last| now.duration_since(*last) >= DEBOUNCE_DURATION)
+                            .unwrap_or(true);
 
-                            if should_send {
-                                last_seen.insert(path.clone(), now);
-                                let _ = tx.send(path.clone());
-                            }
+                        if should_send {
+                            last_seen.insert(path.clone(), now);
+                            let _ = tx.send(path.clone());
                         }
                     }
                 }

@@ -52,7 +52,9 @@ fn install_test_key() -> bool {
 #[test]
 fn test_load_context_round_trip_three_facts_two_entities() {
     if !install_test_key() {
-        eprintln!("skipping test_load_context_round_trip_three_facts_two_entities: keychain unavailable");
+        eprintln!(
+            "skipping test_load_context_round_trip_three_facts_two_entities: keychain unavailable"
+        );
         return;
     }
 
@@ -184,13 +186,9 @@ fn test_load_context_groups_multiple_facts_for_same_entity() {
     }
 
     // Exactly one line must begin with "- Sofia:".
-    let sofia_line_count = stdout
-        .lines()
-        .filter(|l| l.starts_with("- Sofia:"))
-        .count();
+    let sofia_line_count = stdout.lines().filter(|l| l.starts_with("- Sofia:")).count();
     assert_eq!(
-        sofia_line_count,
-        1,
+        sofia_line_count, 1,
         "there should be exactly 1 Sofia entity line; found {}",
         sofia_line_count
     );
