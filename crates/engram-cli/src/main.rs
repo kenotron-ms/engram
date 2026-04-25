@@ -1167,6 +1167,7 @@ fn run_status() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_default_vault_path_ends_with_lifeos_memory() {
@@ -1180,6 +1181,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_default_store_path_ends_with_engram_memory_db() {
         // Remove the env var first so the fallback path is tested deterministically.
         std::env::remove_var("ENGRAM_STORE_PATH");
@@ -1193,6 +1195,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_default_store_path_uses_engram_store_path_env_var() {
         // When ENGRAM_STORE_PATH is set, default_store_path() must return it.
         std::env::set_var("ENGRAM_STORE_PATH", "/tmp/custom_engram_test_store.db");
