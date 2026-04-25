@@ -172,6 +172,33 @@ impl MemoryStore {
         let result: Result<Vec<Memory>, rusqlite::Error> = memories.collect();
         Ok(result?)
     }
+
+    /// Return memories created at or after `since_ms`, ordered by `created_at` DESC, limited to `limit` rows.
+    pub fn list_recent(&self, since_ms: i64, limit: usize) -> Result<Vec<Memory>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entity, attribute, value, source, created_at, updated_at
+             FROM memories WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let memories = stmt.query_map(rusqlite::params![since_ms, limit as i64], row_to_memory)?;
+        let result: Result<Vec<Memory>, rusqlite::Error> = memories.collect();
+        Ok(result?)
+    }
+
+    /// Search memories matching `query` as a LIKE pattern across entity, attribute, and value.
+    ///
+    /// Returns up to 20 results ordered by `updated_at` DESC.
+    pub fn search(&self, query: &str) -> Result<Vec<Memory>, StoreError> {
+        let pattern = format!("%{}%", query);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entity, attribute, value, source, created_at, updated_at
+             FROM memories
+             WHERE entity LIKE ?1 OR attribute LIKE ?1 OR value LIKE ?1
+             ORDER BY updated_at DESC LIMIT 20",
+        )?;
+        let memories = stmt.query_map([&pattern], row_to_memory)?;
+        let result: Result<Vec<Memory>, rusqlite::Error> = memories.collect();
+        Ok(result?)
+    }
 }
 
 // --- Private helpers --------------------------------------------------------
@@ -346,5 +373,59 @@ mod tests {
         store.insert(&m1).expect("insert m1 failed");
         store.insert(&m2).expect("insert m2 failed");
         assert_eq!(store.record_count().expect("count failed"), 2);
+    }
+
+    #[test]
+    fn test_list_recent_returns_memories_after_cutoff() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", None);
+        store.insert(&memory).expect("insert failed");
+        let results = store.list_recent(0, 10).expect("list_recent failed");
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_list_recent_respects_limit() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        for i in 0..5 {
+            let memory = Memory::new("Sofia", &format!("attr{}", i), &format!("val{}", i), None);
+            store.insert(&memory).expect("insert failed");
+        }
+        let results = store.list_recent(0, 3).expect("list_recent failed");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_search_finds_matching_entity() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", None);
+        store.insert(&memory).expect("insert failed");
+        let results = store.search("Sofi").expect("search failed");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entity, "Sofia");
+    }
+
+    #[test]
+    fn test_search_finds_matching_value() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", None);
+        store.insert(&memory).expect("insert failed");
+        let results = store.search("vegeta").expect("search failed");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].value, "vegetarian");
+    }
+
+    #[test]
+    fn test_search_no_match_returns_empty() {
+        let (_dir, db_path) = temp_store();
+        let store = MemoryStore::open(&db_path, &test_key()).expect("open failed");
+        let memory = Memory::new("Sofia", "dietary", "vegetarian", None);
+        store.insert(&memory).expect("insert failed");
+        let results = store.search("nonexistent_xyz").expect("search failed");
+        assert!(results.is_empty());
     }
 }

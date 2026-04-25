@@ -1,5 +1,6 @@
 // engram-cli — Personal memory assistant CLI
 
+mod load;
 mod observe;
 
 use clap::{Parser, Subcommand, ValueEnum};
