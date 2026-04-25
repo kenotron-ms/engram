@@ -1,20 +1,32 @@
+# Phase 5 — Delegation to the engram CLI
+#
+# Memory injection and observation are now handled by the three focused
+# modules below (hook-memory-context, hook-memory-observe, tool-memory),
+# each installed directly from their subdirectory in this repository.
+#
+# The legacy monolithic packages (amplifier_module_engram_hook/,
+# amplifier_module_engram_tool/) are intentionally kept in the repo for
+# reference and backward compatibility but are NO LONGER LOADED here.
+
 bundle:
   name: engram-behavior
-  version: 0.2.0
+  version: 0.3.0
   description: Persistent vector memory — hooks + tools for Amplifier agents
 
 hooks:
-  - module: engram-hook
-    source: git+https://github.com/kenotron-ms/engram@main
+  - module: hook-memory-context
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/hook-memory-context
     config:
       priority: 5
-      inject_role: system
+
+  - module: hook-memory-observe
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/hook-memory-observe
+    config:
+      priority: 90
 
 tools:
-  - module: engram-tool
-    source: git+https://github.com/kenotron-ms/engram@main
-    config:
-      max_results: 20
+  - module: tool-memory
+    source: git+https://github.com/kenotron-ms/engram@main#subdirectory=modules/tool-memory
 
 context:
   include:
