@@ -58,18 +58,15 @@ pub struct Memory {
 impl Memory {
     /// Create a new `Memory` with a UUID v4 id and millisecond timestamps.
     pub fn new(entity: &str, attribute: &str, value: &str, source: Option<&str>) -> Self {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before epoch")
-            .as_millis() as i64;
+        let ts = now_ms();
         Memory {
             id: Uuid::new_v4().to_string(),
             entity: entity.to_string(),
             attribute: attribute.to_string(),
             value: value.to_string(),
             source: source.map(str::to_string),
-            created_at: now_ms,
-            updated_at: now_ms,
+            created_at: ts,
+            updated_at: ts,
         }
     }
 }
@@ -142,17 +139,7 @@ impl MemoryStore {
             "SELECT id, entity, attribute, value, source, created_at, updated_at
              FROM memories WHERE id = ?1",
             [id],
-            |row| {
-                Ok(Memory {
-                    id: row.get(0)?,
-                    entity: row.get(1)?,
-                    attribute: row.get(2)?,
-                    value: row.get(3)?,
-                    source: row.get(4)?,
-                    created_at: row.get(5)?,
-                    updated_at: row.get(6)?,
-                })
-            },
+            row_to_memory,
         );
         match result {
             Ok(memory) => Ok(Some(memory)),
@@ -163,13 +150,9 @@ impl MemoryStore {
 
     /// Update the `value` field and `updated_at` timestamp of a memory.
     pub fn update_value(&self, id: &str, value: &str) -> Result<(), StoreError> {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before epoch")
-            .as_millis() as i64;
         self.conn.execute(
             "UPDATE memories SET value = ?1, updated_at = ?2 WHERE id = ?3",
-            rusqlite::params![value, now_ms, id],
+            rusqlite::params![value, now_ms(), id],
         )?;
         Ok(())
     }
@@ -186,20 +169,33 @@ impl MemoryStore {
             "SELECT id, entity, attribute, value, source, created_at, updated_at
              FROM memories WHERE entity = ?1 ORDER BY updated_at DESC",
         )?;
-        let memories = stmt.query_map([entity], |row| {
-            Ok(Memory {
-                id: row.get(0)?,
-                entity: row.get(1)?,
-                attribute: row.get(2)?,
-                value: row.get(3)?,
-                source: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
-            })
-        })?;
+        let memories = stmt.query_map([entity], row_to_memory)?;
         let result: Result<Vec<Memory>, rusqlite::Error> = memories.collect();
         Ok(result?)
     }
+}
+
+// --- Private helpers --------------------------------------------------------
+
+/// Returns current time as milliseconds since the Unix epoch.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_millis() as i64
+}
+
+/// Deserialise a `memories` table row into a [`Memory`] struct.
+fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
+    Ok(Memory {
+        id:         row.get(0)?,
+        entity:     row.get(1)?,
+        attribute:  row.get(2)?,
+        value:      row.get(3)?,
+        source:     row.get(4)?,
+        created_at: row.get(5)?,
+        updated_at: row.get(6)?,
+    })
 }
 
 #[cfg(test)]
