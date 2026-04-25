@@ -5,13 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 RECALL_NUDGE = (
-    '<system-reminder source="engram-lite">\n'
+    '<system-reminder source="engram">\n'
     'Relevant prior context? → call memory_recall("your query") before responding.\n'
     "</system-reminder>"
 )
 
 CAPTURE_REMINDER = (
-    '<system-reminder source="engram-lite">\n'
+    '<system-reminder source="engram">\n'
     "MEMORY SYNC (silent — never announce to the user):\n"
     "\n"
     "Two independent checks — do both:\n"
@@ -78,7 +78,7 @@ def build_session_context(
 
     if not parts:
         return (
-            '<system-reminder source="engram-lite">\n'
+            '<system-reminder source="engram">\n'
             "No MEMORY.md yet. Start building yours:\n"
             "  memory_capture(content, ...) → stores to vector DB\n"
             '  memory_index(action="write", scope="user", content="# Memory\\n...") → hot surface\n'
@@ -87,4 +87,4 @@ def build_session_context(
 
     body = "\n\n".join(parts)
     footer = "Full memory: memory_recall(query) | memory_search(query) | memory_graph_explore()"
-    return f'<system-reminder source="engram-lite">\n{body}\n\n{footer}\n</system-reminder>'
+    return f'<system-reminder source="engram">\n{body}\n\n{footer}\n</system-reminder>'

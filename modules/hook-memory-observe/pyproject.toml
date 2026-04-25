@@ -1,0 +1,14 @@
+    [build-system]
+    requires = ["hatchling"]
+    build-backend = "hatchling.build"
+
+    [project]
+    name = "amplifier-module-hook-memory-observe"
+    version = "0.1.0"
+    description = "Amplifier hook that processes session transcripts with engram observe at session end"
+    requires-python = ">=3.11"
+    dependencies = []
+
+    [tool.hatch.build.targets.wheel]
+    packages = ["amplifier_module_hook_memory_observe"]
+    

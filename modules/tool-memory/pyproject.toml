@@ -1,0 +1,14 @@
+    [build-system]
+    requires = ["hatchling"]
+    build-backend = "hatchling.build"
+
+    [project]
+    name = "amplifier-module-tool-memory"
+    version = "0.1.0"
+    description = "Amplifier tool module exposing engram memory_search, memory_load, memory_status tools"
+    requires-python = ">=3.11"
+    dependencies = []
+
+    [tool.hatch.build.targets.wheel]
+    packages = ["amplifier_module_tool_memory"]
+    
