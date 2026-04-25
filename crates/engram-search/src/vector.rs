@@ -22,12 +22,10 @@ impl VectorIndex {
     /// connection at `path`, and ensures the `memory_vectors` virtual table exists.
     pub fn open(path: &Path) -> Result<Self, SearchError> {
         // Register the sqlite-vec extension exactly once for this process.
-        INIT_SQLITE_VEC.call_once(|| {
-            unsafe {
-                rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
-                    sqlite_vec::sqlite3_vec_init as *const (),
-                )));
-            }
+        INIT_SQLITE_VEC.call_once(|| unsafe {
+            rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
+                sqlite_vec::sqlite3_vec_init as *const (),
+            )));
         });
 
         let conn = Connection::open(path).map_err(|e| SearchError::Db(e.to_string()))?;
@@ -71,8 +69,8 @@ impl VectorIndex {
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(String, f32)>, SearchError> {
-        let query_json = serde_json::to_string(query_embedding)
-            .map_err(|e| SearchError::Db(e.to_string()))?;
+        let query_json =
+            serde_json::to_string(query_embedding).map_err(|e| SearchError::Db(e.to_string()))?;
 
         // sqlite-vec requires the `k` limit to be a compile-time-visible constraint.
         // Using `k = ?` in the WHERE clause is the canonical approach documented by sqlite-vec.
@@ -135,7 +133,10 @@ mod tests {
 
         let results = index.knn_search(&zero_vec(), 1).unwrap();
         assert_eq!(results.len(), 1, "should find exactly one result");
-        assert_eq!(results[0].0, "vec-zero", "should return the inserted memory_id");
+        assert_eq!(
+            results[0].0, "vec-zero",
+            "should return the inserted memory_id"
+        );
     }
 
     #[test]
@@ -149,7 +150,10 @@ mod tests {
         // Query near the zero vector — zero-vec should rank first (smaller distance).
         let results = index.knn_search(&zero_vec(), 2).unwrap();
         assert_eq!(results.len(), 2, "should return 2 results");
-        assert_eq!(results[0].0, "vec-zero", "vec-zero should be the nearest neighbour");
+        assert_eq!(
+            results[0].0, "vec-zero",
+            "vec-zero should be the nearest neighbour"
+        );
         assert!(
             results[0].1 < results[1].1,
             "nearest neighbour should have a strictly smaller distance: {} vs {}",

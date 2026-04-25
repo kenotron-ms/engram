@@ -835,7 +835,10 @@ mod tests {
         fs::write(dir.path().join("a.txt"), b"hello").unwrap(); // 5 bytes
         fs::write(dir.path().join("b.txt"), b"world!").unwrap(); // 6 bytes
         let size = dir_size_bytes(dir.path());
-        assert_eq!(size, 11, "dir size should be sum of file sizes (5 + 6 = 11)");
+        assert_eq!(
+            size, 11,
+            "dir size should be sum of file sizes (5 + 6 = 11)"
+        );
     }
 
     #[test]
@@ -863,8 +866,7 @@ mod tests {
         // Nothing created in `dir`, so meta.json is absent.
         let status = search_index_status(dir.path());
         assert_eq!(
-            status,
-            "Search index: not built (run: engram index)",
+            status, "Search index: not built (run: engram index)",
             "should return the 'not built' message when meta.json is absent"
         );
     }

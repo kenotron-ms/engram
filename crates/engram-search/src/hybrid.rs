@@ -151,7 +151,10 @@ mod tests {
             .unwrap();
         // other.md: will be in FT results but NOT in the vector index
         vault
-            .write("other.md", "Other content about Sofia and cities in Europe.")
+            .write(
+                "other.md",
+                "Other content about Sofia and cities in Europe.",
+            )
             .unwrap();
 
         let mut indexer = TantivyIndexer::open(index_dir.path()).unwrap();

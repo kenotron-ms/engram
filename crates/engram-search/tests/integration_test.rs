@@ -17,7 +17,9 @@ fn make_vault(files: &[(&str, &str)]) -> (TempDir, Vault) {
     let dir = TempDir::new().expect("failed to create temp dir");
     let vault = Vault::new(dir.path());
     for (path, content) in files {
-        vault.write(path, content).expect("failed to write vault file");
+        vault
+            .write(path, content)
+            .expect("failed to write vault file");
     }
     (dir, vault)
 }
@@ -68,8 +70,14 @@ fn test_full_index_and_search_round_trip() {
     );
 
     // --- Search 'kosher': only Chris.md contains that word ---
-    let results = indexer.search("kosher", MAX_RESULTS).expect("search failed");
-    assert_eq!(results.len(), 1, "search 'kosher' should return exactly 1 result");
+    let results = indexer
+        .search("kosher", MAX_RESULTS)
+        .expect("search failed");
+    assert_eq!(
+        results.len(),
+        1,
+        "search 'kosher' should return exactly 1 result"
+    );
     assert!(
         results[0].path.contains("Chris.md"),
         "the kosher result should be People/Chris.md, got: {}",
@@ -77,7 +85,9 @@ fn test_full_index_and_search_round_trip() {
     );
 
     // --- Search 'dietary': Chris.md and Work/Notes.md both contain the word ---
-    let results = indexer.search("dietary", MAX_RESULTS).expect("search failed");
+    let results = indexer
+        .search("dietary", MAX_RESULTS)
+        .expect("search failed");
     assert!(
         results.len() >= 2,
         "search 'dietary' should return at least 2 results, got {}",
@@ -88,7 +98,10 @@ fn test_full_index_and_search_round_trip() {
 /// Searching an indexed vault with a term that appears in no document returns an empty list.
 #[test]
 fn test_search_returns_empty_for_unknown_query() {
-    let (_vault_dir, vault) = make_vault(&[("note.md", "This is a simple note about everyday life and routine tasks.")]);
+    let (_vault_dir, vault) = make_vault(&[(
+        "note.md",
+        "This is a simple note about everyday life and routine tasks.",
+    )]);
 
     let index_dir = TempDir::new().expect("failed to create index dir");
     let mut indexer = TantivyIndexer::open(index_dir.path()).expect("failed to open indexer");
@@ -110,23 +123,39 @@ fn test_search_returns_empty_for_unknown_query() {
 fn test_incremental_reindex_only_reindexes_changed_file() {
     let (_vault_dir, vault) = make_vault(&[
         ("note1.md", "Note one is all about apples and orchards."),
-        ("note2.md", "Note two discusses bananas and tropical fruit farming."),
-        ("note3.md", "Note three is about cherries and cherry picking season."),
-        ("note4.md", "Note four covers dates and arid-climate agriculture."),
-        ("note5.md", "Note five explores elderberries and their medicinal uses."),
+        (
+            "note2.md",
+            "Note two discusses bananas and tropical fruit farming.",
+        ),
+        (
+            "note3.md",
+            "Note three is about cherries and cherry picking season.",
+        ),
+        (
+            "note4.md",
+            "Note four covers dates and arid-climate agriculture.",
+        ),
+        (
+            "note5.md",
+            "Note five explores elderberries and their medicinal uses.",
+        ),
     ]);
 
     let index_dir = TempDir::new().expect("failed to create index dir");
     let mut indexer = TantivyIndexer::open(index_dir.path()).expect("failed to open indexer");
 
     // --- First pass: all 5 files are new, all must be indexed ---
-    let stats = indexer.index_vault(&vault).expect("first index_vault failed");
+    let stats = indexer
+        .index_vault(&vault)
+        .expect("first index_vault failed");
     assert_eq!(stats.total, 5, "first pass: total should be 5");
     assert_eq!(stats.indexed, 5, "first pass: all 5 should be indexed");
     assert_eq!(stats.skipped, 0, "first pass: none should be skipped");
 
     // --- Second pass: nothing changed, all 5 should be skipped ---
-    let stats = indexer.index_vault(&vault).expect("second index_vault failed");
+    let stats = indexer
+        .index_vault(&vault)
+        .expect("second index_vault failed");
     assert_eq!(stats.total, 5, "second pass: total should be 5");
     assert_eq!(stats.indexed, 0, "second pass: none should be indexed");
     assert_eq!(stats.skipped, 5, "second pass: all 5 should be skipped");
@@ -140,13 +169,20 @@ fn test_incremental_reindex_only_reindexes_changed_file() {
         .expect("failed to update note3.md");
 
     // --- Third pass: only note3.md has changed, index 1 skip 4 ---
-    let stats = indexer.index_vault(&vault).expect("third index_vault failed");
+    let stats = indexer
+        .index_vault(&vault)
+        .expect("third index_vault failed");
     assert_eq!(stats.total, 5, "third pass: total should be 5");
-    assert_eq!(stats.indexed, 1, "third pass: only 1 file should be re-indexed");
+    assert_eq!(
+        stats.indexed, 1,
+        "third pass: only 1 file should be re-indexed"
+    );
     assert_eq!(stats.skipped, 4, "third pass: 4 files should be skipped");
 
     // --- New content must be searchable ---
-    let results = indexer.search("mangoes", MAX_RESULTS).expect("search failed");
+    let results = indexer
+        .search("mangoes", MAX_RESULTS)
+        .expect("search failed");
     assert!(
         !results.is_empty(),
         "new content in note3.md should be searchable after re-index"
@@ -187,8 +223,8 @@ fn test_hybrid_search_full_round_trip() {
 
     // --- Vector index ---
     let vec_db_dir = TempDir::new().expect("failed to create vector db dir");
-    let vector_index =
-        VectorIndex::open(&vec_db_dir.path().join("vectors.db")).expect("failed to open vector index");
+    let vector_index = VectorIndex::open(&vec_db_dir.path().join("vectors.db"))
+        .expect("failed to open vector index");
 
     let embedder = Embedder::new().expect("failed to initialise embedder");
 
@@ -198,14 +234,18 @@ fn test_hybrid_search_full_round_trip() {
         .insert("People/Sofia.md", &sofia_embedding)
         .expect("insert Sofia embedding failed");
 
-    let transcript_embedding = embedder.embed(transcript_text).expect("embed Transcript failed");
+    let transcript_embedding = embedder
+        .embed(transcript_text)
+        .expect("embed Transcript failed");
     vector_index
         .insert("Meeting/Transcript.md", &transcript_embedding)
         .expect("insert Transcript embedding failed");
 
     // --- Hybrid search ---
     let hybrid = HybridSearch::new(indexer, vector_index, embedder);
-    let results = hybrid.search("Sofia vegetarian", MAX_RESULTS).expect("hybrid search failed");
+    let results = hybrid
+        .search("Sofia vegetarian", MAX_RESULTS)
+        .expect("hybrid search failed");
 
     assert!(
         !results.is_empty(),
