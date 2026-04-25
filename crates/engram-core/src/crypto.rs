@@ -253,6 +253,10 @@ mod tests {
 
     #[test]
     fn test_store_and_retrieve_key() {
+        // Keychain write requires an unlocked keychain; skip in headless environments.
+        if std::env::var("ENGRAM_KEYCHAIN_TESTS").is_err() {
+            return;
+        }
         let salt = [42u8; 16];
         let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
         let store = KeyStore::new("engram-test-suite");
@@ -272,6 +276,10 @@ mod tests {
 
     #[test]
     fn test_delete_key_then_retrieve_fails() {
+        // Keychain write requires an unlocked keychain; skip in headless environments.
+        if std::env::var("ENGRAM_KEYCHAIN_TESTS").is_err() {
+            return;
+        }
         let salt = [42u8; 16];
         let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
         let store = KeyStore::new("engram-test-suite");
