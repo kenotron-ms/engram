@@ -268,6 +268,7 @@ impl TantivyIndexer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engram_core::vault::Vault;
     use tempfile::TempDir;
 
     fn make_indexer() -> (TantivyIndexer, TempDir) {
@@ -329,5 +330,117 @@ mod tests {
             results.is_empty(),
             "search should return empty for no matches"
         );
+    }
+
+    // --- Incremental indexing tests ---
+
+    #[test]
+    fn test_needs_reindex_returns_true_for_missing_path() {
+        let (indexer, _dir) = make_indexer();
+        // A path that was never indexed must require indexing.
+        let hash = TantivyIndexer::content_hash("some content");
+        assert!(
+            indexer.needs_reindex("never/indexed.md", &hash),
+            "needs_reindex should return true for a path that has never been indexed"
+        );
+    }
+
+    #[test]
+    fn test_needs_reindex_returns_false_when_hash_unchanged() {
+        let (mut indexer, _dir) = make_indexer();
+        let content = "this is my note content";
+        indexer.index_file("notes/unchanged.md", content).unwrap();
+
+        let hash = TantivyIndexer::content_hash(content);
+        assert!(
+            !indexer.needs_reindex("notes/unchanged.md", &hash),
+            "needs_reindex should return false when the stored hash matches the current hash"
+        );
+    }
+
+    #[test]
+    fn test_needs_reindex_returns_true_when_hash_changed() {
+        let (mut indexer, _dir) = make_indexer();
+        let original = "original content";
+        indexer.index_file("notes/note.md", original).unwrap();
+
+        // Compute a hash for *different* content.
+        let different_hash = TantivyIndexer::content_hash("modified content");
+        assert!(
+            indexer.needs_reindex("notes/note.md", &different_hash),
+            "needs_reindex should return true when the stored hash differs from the current hash"
+        );
+    }
+
+    #[test]
+    fn test_index_vault_first_run_indexes_all_files() {
+        let index_dir = TempDir::new().unwrap();
+        let vault_dir = TempDir::new().unwrap();
+        let vault = Vault::new(vault_dir.path());
+
+        vault.write("note1.md", "First note content").unwrap();
+        vault.write("note2.md", "Second note content").unwrap();
+
+        let mut indexer = TantivyIndexer::open(index_dir.path()).unwrap();
+        let stats = indexer.index_vault(&vault).unwrap();
+
+        assert_eq!(stats.total, 2, "total should be 2");
+        assert_eq!(stats.indexed, 2, "indexed should be 2 on first run");
+        assert_eq!(stats.skipped, 0, "skipped should be 0 on first run");
+    }
+
+    #[test]
+    fn test_index_vault_second_run_skips_unchanged_files() {
+        let index_dir = TempDir::new().unwrap();
+        let vault_dir = TempDir::new().unwrap();
+        let vault = Vault::new(vault_dir.path());
+
+        vault.write("note.md", "Unchanged content").unwrap();
+
+        let mut indexer = TantivyIndexer::open(index_dir.path()).unwrap();
+
+        // First run — file is new, must be indexed.
+        let first_stats = indexer.index_vault(&vault).unwrap();
+        assert_eq!(first_stats.indexed, 1, "first run: indexed should be 1");
+        assert_eq!(first_stats.skipped, 0, "first run: skipped should be 0");
+
+        // Second run — content unchanged, must be skipped.
+        let second_stats = indexer.index_vault(&vault).unwrap();
+        assert_eq!(second_stats.indexed, 0, "second run: indexed should be 0");
+        assert_eq!(second_stats.skipped, 1, "second run: skipped should be 1");
+    }
+
+    #[test]
+    fn test_index_vault_reindexes_changed_file() {
+        let index_dir = TempDir::new().unwrap();
+        let vault_dir = TempDir::new().unwrap();
+        let vault = Vault::new(vault_dir.path());
+
+        vault
+            .write("note.md", "Original content about cats")
+            .unwrap();
+
+        let mut indexer = TantivyIndexer::open(index_dir.path()).unwrap();
+
+        // First run — index the original content.
+        indexer.index_vault(&vault).unwrap();
+
+        // Modify the file.
+        vault
+            .write("note.md", "Updated content about dogs")
+            .unwrap();
+
+        // Second run — changed file must be reindexed.
+        let stats = indexer.index_vault(&vault).unwrap();
+        assert_eq!(stats.indexed, 1, "should have reindexed the 1 changed file");
+        assert_eq!(stats.skipped, 0, "should have skipped 0 files");
+
+        // The new content must be searchable.
+        let results = indexer.search("dogs", 10).unwrap();
+        assert!(
+            !results.is_empty(),
+            "updated content should be searchable after reindexing"
+        );
+        assert_eq!(results[0].path, "note.md");
     }
 }
