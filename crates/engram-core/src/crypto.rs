@@ -21,8 +21,14 @@ pub enum CryptoError {
 }
 
 /// A 32-byte derived encryption key.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct EngramKey([u8; 32]);
+
+impl std::fmt::Debug for EngramKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EngramKey([REDACTED])")
+    }
+}
 
 /// Generate a cryptographically random 16-byte salt.
 pub fn generate_salt() -> [u8; 16] {
