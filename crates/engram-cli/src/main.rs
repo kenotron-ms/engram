@@ -536,8 +536,16 @@ fn default_vault_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
 }
 
-/// Returns the default memory store path: `~/.engram/memory.db`.
+/// Returns the memory store path.
+///
+/// If the `ENGRAM_STORE_PATH` environment variable is set, its value is used
+/// directly, allowing tests and operators to point to a custom database without
+/// modifying the system keychain or home directory.  Otherwise the default path
+/// `~/.engram/memory.db` is returned.
 fn default_store_path() -> PathBuf {
+    if let Ok(p) = std::env::var("ENGRAM_STORE_PATH") {
+        return PathBuf::from(p);
+    }
     UserDirs::new()
         .map(|u| u.home_dir().join(".engram/memory.db"))
         .unwrap_or_else(|| PathBuf::from(".engram/memory.db"))
@@ -1173,12 +1181,27 @@ mod tests {
 
     #[test]
     fn test_default_store_path_ends_with_engram_memory_db() {
+        // Remove the env var first so the fallback path is tested deterministically.
+        std::env::remove_var("ENGRAM_STORE_PATH");
         let path = default_store_path();
         let path_str = path.to_string_lossy();
         assert!(
             path_str.ends_with(".engram/memory.db"),
             "store path should end with .engram/memory.db, got: {}",
             path_str
+        );
+    }
+
+    #[test]
+    fn test_default_store_path_uses_engram_store_path_env_var() {
+        // When ENGRAM_STORE_PATH is set, default_store_path() must return it.
+        std::env::set_var("ENGRAM_STORE_PATH", "/tmp/custom_engram_test_store.db");
+        let path = default_store_path();
+        std::env::remove_var("ENGRAM_STORE_PATH");
+        assert_eq!(
+            path.to_str().unwrap(),
+            "/tmp/custom_engram_test_store.db",
+            "default_store_path() should use ENGRAM_STORE_PATH env var when set"
         );
     }
 
