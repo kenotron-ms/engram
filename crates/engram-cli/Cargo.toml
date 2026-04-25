@@ -1,0 +1,16 @@
+[package]
+    name = "engram"
+    version = "0.1.0"
+    edition = "2021"
+
+    [[bin]]
+    name = "engram"
+    path = "src/main.rs"
+
+    [dependencies]
+    engram-core = { path = "../engram-core" }
+    clap = { version = "4", features = ["derive"] }
+    directories = "5"
+    thiserror = "2"
+    anyhow = "1"
+    
