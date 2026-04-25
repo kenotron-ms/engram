@@ -15,7 +15,7 @@
     engram-core = { path = "../engram-core" }
     engram-sync = { path = "../engram-sync" }
     engram-search = { path = "../engram-search" }
-    clap = { version = "4", features = ["derive"] }
+    clap = { version = "4", features = ["derive", "env"] }
     directories = "5"
     thiserror = "2"
     anyhow = "1"

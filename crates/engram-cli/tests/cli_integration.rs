@@ -476,6 +476,27 @@ fn test_index_nonexistent_vault_exits_nonzero() {
         .stderr(predicate::str::contains("Vault not found"));
 }
 
+// ─── engram observe tests (Task 4) ──────────────────────────────────────────
+
+/// `engram observe --help` must exit 0 and show `session-path` and `api-key` args.
+#[test]
+fn test_observe_help_shows_expected_args() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["observe", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("session-path"))
+        .stdout(predicate::str::contains("api-key"));
+}
+
+/// `engram observe <nonexistent-path>` must exit with a non-zero code.
+#[test]
+fn test_observe_nonexistent_path_exits_nonzero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["observe", "/tmp/nonexistent_engram_session_path_xyz_abc"]);
+    cmd.assert().failure();
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]

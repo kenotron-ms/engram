@@ -1,5 +1,7 @@
 // engram-cli — Personal memory assistant CLI
 
+mod observe;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
@@ -60,6 +62,15 @@ enum Commands {
         /// Search mode: fulltext (BM25), vector (KNN), or hybrid (RRF merge)
         #[arg(long, default_value = "hybrid")]
         mode: SearchMode,
+    },
+    /// Observe a session transcript and extract facts into memory
+    Observe {
+        /// Path to the session transcript file (JSONL)
+        #[arg(value_name = "session-path")]
+        session_path: PathBuf,
+        /// Anthropic API key for LLM fact extraction
+        #[arg(long, env = "ANTHROPIC_API_KEY")]
+        api_key: Option<String>,
     },
 }
 
@@ -147,6 +158,10 @@ fn main() {
         Commands::Sync { backend } => run_sync(backend.as_deref()),
         Commands::Index { vault, force } => run_index(vault, force),
         Commands::Search { query, limit, mode } => run_search(&query, limit, &mode),
+        Commands::Observe {
+            session_path,
+            api_key,
+        } => run_observe(&session_path, api_key.as_deref()),
     }
 }
 
@@ -758,6 +773,54 @@ fn run_search(query: &str, limit: usize, mode: &SearchMode) {
         println!("{} (score: {:.2})", result.path, result.score);
         if !result.snippet.is_empty() {
             println!("  {}", result.snippet);
+        }
+    }
+}
+
+/// Observe a session transcript: parse turns, extract facts via LLM, write to store.
+fn run_observe(session_path: &Path, api_key: Option<&str>) {
+    // Resolve API key — required for LLM fact extraction.
+    let api_key = match api_key {
+        Some(k) if !k.is_empty() => k.to_string(),
+        _ => {
+            eprintln!(
+                "Error: Anthropic API key is required. \
+                 Set --api-key or ANTHROPIC_API_KEY environment variable."
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Retrieve the vault encryption key from the system keyring.
+    let key_store = KeyStore::new("engram");
+    let key = match key_store.retrieve() {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("No vault key found. Run: engram init");
+            std::process::exit(1);
+        }
+    };
+
+    // Open (or create) the memory store.
+    let store_path = default_store_path();
+    let store = match MemoryStore::open(&store_path, &key) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to open memory store: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Run the full observation pipeline.
+    match observe::observe_session(session_path, &store, &api_key) {
+        Ok(stats) => {
+            println!("Observed:  {}", stats.session_path);
+            println!("Extracted: {}", stats.facts_extracted);
+            println!("Written:   {}", stats.facts_written);
+        }
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
         }
     }
 }
