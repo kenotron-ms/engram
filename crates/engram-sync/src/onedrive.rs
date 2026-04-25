@@ -1,9 +1,9 @@
 // crates/engram-sync/src/onedrive.rs
 
+use crate::backend::{SyncBackend, SyncError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::{Client, StatusCode};
-use crate::backend::{SyncBackend, SyncError};
 
 const GRAPH_DRIVE_ROOT: &str = "https://graph.microsoft.com/v1.0/me/drive/root:";
 
@@ -41,7 +41,8 @@ impl OneDriveBackend {
 impl SyncBackend for OneDriveBackend {
     async fn push(&self, path: &str, data: Bytes) -> Result<(), SyncError> {
         let url = self.item_url(path);
-        let response = self.client
+        let response = self
+            .client
             .put(&url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/octet-stream")
@@ -59,7 +60,8 @@ impl SyncBackend for OneDriveBackend {
 
     async fn pull(&self, path: &str) -> Result<Bytes, SyncError> {
         let url = self.item_url(path);
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
@@ -78,7 +80,8 @@ impl SyncBackend for OneDriveBackend {
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, SyncError> {
         let url = format!("{}{}:/children", GRAPH_DRIVE_ROOT, self.full_path(prefix));
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
@@ -97,9 +100,7 @@ impl SyncBackend for OneDriveBackend {
             .as_array()
             .unwrap_or(&vec![])
             .iter()
-            .filter_map(|item| {
-                item["name"].as_str().map(|s| format!("{}/{}", prefix, s))
-            })
+            .filter_map(|item| item["name"].as_str().map(|s| format!("{}/{}", prefix, s)))
             .collect();
         Ok(names)
     }
@@ -107,7 +108,8 @@ impl SyncBackend for OneDriveBackend {
     async fn delete(&self, path: &str) -> Result<(), SyncError> {
         // Use the items endpoint for delete (the content endpoint doesn't support DELETE)
         let url = format!("{}{}", GRAPH_DRIVE_ROOT, self.full_path(path));
-        let response = self.client
+        let response = self
+            .client
             .delete(&url)
             .header("Authorization", self.auth_header())
             .send()

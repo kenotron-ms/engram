@@ -1,8 +1,8 @@
 // crates/engram-sync/src/encrypt.rs
 
+use crate::backend::SyncError;
 use bytes::Bytes;
 use engram_core::crypto::{decrypt, encrypt, EngramKey};
-use crate::backend::SyncError;
 
 pub const MAGIC: &[u8] = b"ENGRAM_V1:";
 
@@ -12,8 +12,7 @@ pub const MAGIC: &[u8] = b"ENGRAM_V1:";
 /// identifiable without attempting decryption. The actual encryption
 /// is delegated to `engram_core::crypto::encrypt` (XChaCha20-Poly1305).
 pub fn encrypt_for_sync(key: &EngramKey, plaintext: &[u8]) -> Result<Bytes, SyncError> {
-    let ciphertext = encrypt(key, plaintext)
-        .map_err(|e| SyncError::Encryption(e.to_string()))?;
+    let ciphertext = encrypt(key, plaintext).map_err(|e| SyncError::Encryption(e.to_string()))?;
     let mut output = Vec::with_capacity(MAGIC.len() + ciphertext.len());
     output.extend_from_slice(MAGIC);
     output.extend_from_slice(&ciphertext);
@@ -31,14 +30,13 @@ pub fn decrypt_from_sync(key: &EngramKey, data: &[u8]) -> Result<Vec<u8>, SyncEr
         ));
     }
     let ciphertext = &data[MAGIC.len()..];
-    decrypt(key, ciphertext)
-        .map_err(|e| SyncError::Encryption(e.to_string()))
+    decrypt(key, ciphertext).map_err(|e| SyncError::Encryption(e.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
-    use engram_core::crypto::EngramKey;
     use super::*;
+    use engram_core::crypto::EngramKey;
 
     fn test_key() -> EngramKey {
         // EngramKey::derive takes &[u8] (byte slice), not &str

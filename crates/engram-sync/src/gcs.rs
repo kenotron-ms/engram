@@ -1,27 +1,26 @@
 // crates/engram-sync/src/gcs.rs
 
+use crate::backend::{SyncBackend, SyncError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{gcp::GoogleCloudStorageBuilder, path::Path, ObjectStore};
 use std::sync::Arc;
-use crate::backend::{SyncBackend, SyncError};
 
 pub struct GcsBackend {
     pub(crate) store: Arc<dyn ObjectStore>,
 }
 
 impl GcsBackend {
-    pub fn new(
-        bucket: &str,
-        service_account_key_path: &str,
-    ) -> Result<Self, SyncError> {
+    pub fn new(bucket: &str, service_account_key_path: &str) -> Result<Self, SyncError> {
         let store = GoogleCloudStorageBuilder::new()
             .with_bucket_name(bucket)
             .with_service_account_path(service_account_key_path)
             .build()
             .map_err(|e| SyncError::Backend(e.to_string()))?;
-        Ok(Self { store: Arc::new(store) })
+        Ok(Self {
+            store: Arc::new(store),
+        })
     }
 }
 
@@ -36,7 +35,8 @@ impl SyncBackend for GcsBackend {
     }
 
     async fn pull(&self, path: &str) -> Result<Bytes, SyncError> {
-        let result = self.store
+        let result = self
+            .store
             .get(&Path::from(path))
             .await
             .map_err(|e| match e {
@@ -50,10 +50,7 @@ impl SyncBackend for GcsBackend {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, SyncError> {
-        let results: Vec<_> = self.store
-            .list(Some(&Path::from(prefix)))
-            .collect()
-            .await;
+        let results: Vec<_> = self.store.list(Some(&Path::from(prefix))).collect().await;
         results
             .into_iter()
             .map(|r| {
@@ -86,7 +83,9 @@ mod tests {
 
     fn local_backend(dir: &TempDir) -> GcsBackend {
         let store = LocalFileSystem::new_with_prefix(dir.path()).unwrap();
-        GcsBackend { store: Arc::new(store) }
+        GcsBackend {
+            store: Arc::new(store),
+        }
     }
 
     #[tokio::test]
@@ -103,8 +102,14 @@ mod tests {
     async fn test_list_returns_pushed_paths() {
         let dir = TempDir::new().unwrap();
         let backend = local_backend(&dir);
-        backend.push("vault/Personal/diary.md", Bytes::from("a")).await.unwrap();
-        backend.push("vault/Personal/goals.md", Bytes::from("b")).await.unwrap();
+        backend
+            .push("vault/Personal/diary.md", Bytes::from("a"))
+            .await
+            .unwrap();
+        backend
+            .push("vault/Personal/goals.md", Bytes::from("b"))
+            .await
+            .unwrap();
         let paths = backend.list("vault/Personal").await.unwrap();
         assert_eq!(paths.len(), 2);
     }
@@ -113,7 +118,10 @@ mod tests {
     async fn test_delete_removes_object() {
         let dir = TempDir::new().unwrap();
         let backend = local_backend(&dir);
-        backend.push("vault/temp.md", Bytes::from("x")).await.unwrap();
+        backend
+            .push("vault/temp.md", Bytes::from("x"))
+            .await
+            .unwrap();
         backend.delete("vault/temp.md").await.unwrap();
         assert!(backend.pull("vault/temp.md").await.is_err());
     }

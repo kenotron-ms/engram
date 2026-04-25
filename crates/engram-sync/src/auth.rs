@@ -26,8 +26,8 @@ impl AuthStore {
     /// Store a credential in the platform keychain.
     pub fn store(backend: &str, key: &str, value: &str) -> Result<(), AuthError> {
         let username = format!("{}:{}", backend, key);
-        let entry = Entry::new(SERVICE, &username)
-            .map_err(|e| AuthError::Keyring(e.to_string()))?;
+        let entry =
+            Entry::new(SERVICE, &username).map_err(|e| AuthError::Keyring(e.to_string()))?;
         // Delete any pre-existing entry to avoid "already exists" errors on some platforms.
         entry.delete_password().ok();
         entry
@@ -89,7 +89,10 @@ mod tests {
     fn test_is_configured_all_present() {
         AuthStore::store("s3", "ci-access-key", "key1").unwrap();
         AuthStore::store("s3", "ci-secret-key", "key2").unwrap();
-        assert!(AuthStore::is_configured("s3", &["ci-access-key", "ci-secret-key"]));
+        assert!(AuthStore::is_configured(
+            "s3",
+            &["ci-access-key", "ci-secret-key"]
+        ));
         AuthStore::delete("s3", "ci-access-key").unwrap();
         AuthStore::delete("s3", "ci-secret-key").unwrap();
     }
@@ -97,6 +100,9 @@ mod tests {
     #[test]
     fn test_is_configured_partial_returns_false() {
         // No keychain write — safe to run in CI.
-        assert!(!AuthStore::is_configured("s3", &["key-missing-xyz", "another-missing-xyz"]));
+        assert!(!AuthStore::is_configured(
+            "s3",
+            &["key-missing-xyz", "another-missing-xyz"]
+        ));
     }
 }

@@ -1,11 +1,11 @@
 // crates/engram-sync/src/s3.rs
 
+use crate::backend::{SyncBackend, SyncError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use object_store::{aws::AmazonS3Builder, path::Path, ObjectStore};
 use std::sync::Arc;
-use crate::backend::{SyncBackend, SyncError};
 
 pub struct S3Backend {
     pub(crate) store: Arc<dyn ObjectStore>,
@@ -53,7 +53,8 @@ impl SyncBackend for S3Backend {
     }
 
     async fn pull(&self, path: &str) -> Result<Bytes, SyncError> {
-        let result = self.store
+        let result = self
+            .store
             .get(&Path::from(path))
             .await
             .map_err(|e| match e {
@@ -69,10 +70,7 @@ impl SyncBackend for S3Backend {
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, SyncError> {
         let prefix_path = Path::from(prefix);
-        let results: Vec<_> = self.store
-            .list(Some(&prefix_path))
-            .collect()
-            .await;
+        let results: Vec<_> = self.store.list(Some(&prefix_path)).collect().await;
         results
             .into_iter()
             .map(|r| {
@@ -122,8 +120,14 @@ mod tests {
     async fn test_list_returns_pushed_paths() {
         let dir = TempDir::new().unwrap();
         let backend = local_backend(&dir);
-        backend.push("vault/People/Sofia.md", Bytes::from("a")).await.unwrap();
-        backend.push("vault/People/Chris.md", Bytes::from("b")).await.unwrap();
+        backend
+            .push("vault/People/Sofia.md", Bytes::from("a"))
+            .await
+            .unwrap();
+        backend
+            .push("vault/People/Chris.md", Bytes::from("b"))
+            .await
+            .unwrap();
         let paths = backend.list("vault/People").await.unwrap();
         assert_eq!(paths.len(), 2);
     }
@@ -132,7 +136,10 @@ mod tests {
     async fn test_delete_removes_object() {
         let dir = TempDir::new().unwrap();
         let backend = local_backend(&dir);
-        backend.push("vault/temp.md", Bytes::from("x")).await.unwrap();
+        backend
+            .push("vault/temp.md", Bytes::from("x"))
+            .await
+            .unwrap();
         backend.delete("vault/temp.md").await.unwrap();
         assert!(backend.pull("vault/temp.md").await.is_err());
     }

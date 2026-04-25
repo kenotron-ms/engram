@@ -209,7 +209,9 @@ fn test_auth_add_azure_prints_confirmation() {
     cmd.write_stdin("test-access-key\n");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\u{2713} Azure backend configured"))
+        .stdout(predicate::str::contains(
+            "\u{2713} Azure backend configured",
+        ))
         .stdout(predicate::str::contains("test-account"))
         .stdout(predicate::str::contains("test-container"));
 }
@@ -249,9 +251,9 @@ fn test_auth_list_shows_no_backends_when_none_configured() {
 fn test_auth_list_shows_separator() {
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args(["auth", "list"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("─────────────────────────────────────────"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "─────────────────────────────────────────",
+    ));
 }
 
 /// `engram auth list` must print the "Configured sync backends:" header.
@@ -277,9 +279,9 @@ fn test_auth_remove_unknown_backend_exits_nonzero() {
 fn test_auth_remove_unknown_backend_prints_error() {
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args(["auth", "remove", "unknown-backend-xyz"]);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Unknown backend: unknown-backend-xyz"));
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Unknown backend: unknown-backend-xyz",
+    ));
 }
 
 /// `engram auth remove` with a known but unconfigured backend must exit 0 and say "No credentials found".

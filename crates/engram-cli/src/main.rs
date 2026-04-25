@@ -5,10 +5,6 @@ use directories::UserDirs;
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use std::path::PathBuf;
 
-// Pull in the engram-sync crate so its modules (e.g. auth) are accessible.
-#[allow(unused_imports)]
-use engram_sync;
-
 /// Personal memory assistant
 #[derive(Parser)]
 #[command(name = "engram", about = "Personal memory assistant")]
@@ -128,21 +124,17 @@ fn run_auth_add_s3(
     use engram_sync::auth::AuthStore;
     use std::io::{self, Write};
 
-    let ak = access_key
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            print!("Access key ID: ");
-            io::stdout().flush().unwrap();
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).unwrap();
-            input.trim().to_string()
-        });
+    let ak = access_key.map(|s| s.to_string()).unwrap_or_else(|| {
+        print!("Access key ID: ");
+        io::stdout().flush().unwrap();
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        input.trim().to_string()
+    });
 
     let sk = secret_key
         .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            rpassword::prompt_password("Secret access key: ").unwrap_or_default()
-        });
+        .unwrap_or_else(|| rpassword::prompt_password("Secret access key: ").unwrap_or_default());
 
     AuthStore::store("s3", "access_key", &ak).unwrap();
     AuthStore::store("s3", "secret_key", &sk).unwrap();
@@ -186,7 +178,10 @@ fn run_auth_add_onedrive(folder: &str) {
             ("client_id", client_id),
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
-            ("redirect_uri", "https://login.microsoftonline.com/common/oauth2/nativeclient"),
+            (
+                "redirect_uri",
+                "https://login.microsoftonline.com/common/oauth2/nativeclient",
+            ),
             ("scope", "Files.ReadWrite offline_access"),
         ])
         .send()
@@ -239,10 +234,18 @@ fn run_auth_list() {
 
     // (backend_name, required_keys_for_is_configured, display_keys_non_sensitive)
     let backends: &[(&str, &[&str], &[&str])] = &[
-        ("s3",       &["access_key", "secret_key", "endpoint", "bucket"], &["endpoint", "bucket"]),
-        ("onedrive", &["access_token", "folder"],                         &["folder"]),
-        ("azure",    &["account", "container"],                           &["account", "container"]),
-        ("gcs",      &["bucket", "key_file"],                             &["bucket", "key_file"]),
+        (
+            "s3",
+            &["access_key", "secret_key", "endpoint", "bucket"],
+            &["endpoint", "bucket"],
+        ),
+        ("onedrive", &["access_token", "folder"], &["folder"]),
+        (
+            "azure",
+            &["account", "container"],
+            &["account", "container"],
+        ),
+        ("gcs", &["bucket", "key_file"], &["bucket", "key_file"]),
     ];
 
     println!("{}", "─".repeat(41));
@@ -279,17 +282,26 @@ fn run_auth_remove(backend: &str) {
     use std::collections::HashMap;
 
     let keys_by_backend: HashMap<&str, &[&str]> = [
-        ("s3",       ["access_key", "secret_key", "endpoint", "bucket"].as_slice()),
-        ("onedrive", ["access_token", "refresh_token", "folder"].as_slice()),
-        ("azure",    ["account", "access_key", "container"].as_slice()),
-        ("gcs",      ["bucket", "key_file"].as_slice()),
+        (
+            "s3",
+            ["access_key", "secret_key", "endpoint", "bucket"].as_slice(),
+        ),
+        (
+            "onedrive",
+            ["access_token", "refresh_token", "folder"].as_slice(),
+        ),
+        ("azure", ["account", "access_key", "container"].as_slice()),
+        ("gcs", ["bucket", "key_file"].as_slice()),
     ]
     .into_iter()
     .collect();
 
     match keys_by_backend.get(backend) {
         None => {
-            eprintln!("Unknown backend: {}. Valid options: s3, onedrive, azure, gcs", backend);
+            eprintln!(
+                "Unknown backend: {}. Valid options: s3, onedrive, azure, gcs",
+                backend
+            );
             std::process::exit(1);
         }
         Some(keys) => {
@@ -309,11 +321,8 @@ fn run_auth_remove(backend: &str) {
 fn run_sync(backend_name: Option<&str>) {
     use engram_core::{crypto::KeyStore, vault::Vault};
     use engram_sync::{
-        auth::AuthStore,
-        backend::SyncBackend,
-        encrypt::encrypt_for_sync,
-        onedrive::OneDriveBackend,
-        s3::S3Backend,
+        auth::AuthStore, backend::SyncBackend, encrypt::encrypt_for_sync,
+        onedrive::OneDriveBackend, s3::S3Backend,
     };
 
     let vault_path = default_vault_path();
@@ -347,18 +356,21 @@ fn run_sync(backend_name: Option<&str>) {
     let backend: Box<dyn SyncBackend> = match effective_backend {
         "s3" => {
             let endpoint = AuthStore::retrieve("s3", "endpoint").unwrap();
-            let bucket   = AuthStore::retrieve("s3", "bucket").unwrap();
-            let ak       = AuthStore::retrieve("s3", "access_key").unwrap();
-            let sk       = AuthStore::retrieve("s3", "secret_key").unwrap();
+            let bucket = AuthStore::retrieve("s3", "bucket").unwrap();
+            let ak = AuthStore::retrieve("s3", "access_key").unwrap();
+            let sk = AuthStore::retrieve("s3", "secret_key").unwrap();
             Box::new(S3Backend::new(&endpoint, &bucket, &ak, &sk).unwrap())
         }
         "onedrive" => {
-            let token  = AuthStore::retrieve("onedrive", "access_token").unwrap();
+            let token = AuthStore::retrieve("onedrive", "access_token").unwrap();
             let folder = AuthStore::retrieve("onedrive", "folder").unwrap();
             Box::new(OneDriveBackend::new(&token, &folder))
         }
         other => {
-            eprintln!("Backend '{}' is not yet supported in engram sync. Use: s3, onedrive", other);
+            eprintln!(
+                "Backend '{}' is not yet supported in engram sync. Use: s3, onedrive",
+                other
+            );
             std::process::exit(1);
         }
     };
@@ -371,7 +383,11 @@ fn run_sync(backend_name: Option<&str>) {
         }
     };
 
-    println!("Syncing {} files via {} ...", files.len(), effective_backend);
+    println!(
+        "Syncing {} files via {} ...",
+        files.len(),
+        effective_backend
+    );
 
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let mut success = 0usize;
