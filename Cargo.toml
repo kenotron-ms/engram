@@ -2,6 +2,6 @@
     members = [
         "crates/engram-core",
         "crates/engram-cli",
+        "crates/engram-sync",
     ]
     resolver = "2"
-    
