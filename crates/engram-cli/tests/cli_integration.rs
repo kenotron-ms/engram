@@ -82,3 +82,79 @@ fn test_status_memory_store_state_is_printed() {
         stdout
     );
 }
+
+// ── Auth subcommand tests ─────────────────────────────────────────────────────
+
+/// `engram auth --help` must show the expected subcommands: add, list, remove.
+#[test]
+fn test_auth_subcommand_help_shows_variants() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("remove"));
+}
+
+/// `engram auth add --help` must show the four backend options.
+#[test]
+fn test_auth_add_subcommand_help_shows_backends() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "add", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("s3"))
+        .stdout(predicate::str::contains("onedrive"))
+        .stdout(predicate::str::contains("azure"))
+        .stdout(predicate::str::contains("gdrive"));
+}
+
+/// `engram auth add s3 --help` must show all four expected flags.
+#[test]
+fn test_auth_add_s3_help_shows_flags() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "add", "s3", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--endpoint"))
+        .stdout(predicate::str::contains("--bucket"))
+        .stdout(predicate::str::contains("--access-key"))
+        .stdout(predicate::str::contains("--secret-key"));
+}
+
+/// `engram sync --help` must show the --backend flag.
+#[test]
+fn test_sync_subcommand_help_shows_backend_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["sync", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--backend"));
+}
+
+/// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
+/// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
+#[test]
+#[ignore = "requires keychain access; run with cargo test -- --include-ignored in a GUI session"]
+fn test_auth_add_s3_prints_confirmation() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args([
+        "auth",
+        "add",
+        "s3",
+        "--endpoint",
+        "https://r2.example.com",
+        "--bucket",
+        "test-bucket",
+        "--access-key",
+        "test-ak",
+        "--secret-key",
+        "test-sk",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713} S3 backend configured"))
+        .stdout(predicate::str::contains("https://r2.example.com"))
+        .stdout(predicate::str::contains("test-bucket"));
+}

@@ -5,6 +5,10 @@ use directories::UserDirs;
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use std::path::PathBuf;
 
+// Pull in the engram-sync crate so its modules (e.g. auth) are accessible.
+#[allow(unused_imports)]
+use engram_sync;
+
 /// Personal memory assistant
 #[derive(Parser)]
 #[command(name = "engram", about = "Personal memory assistant")]
@@ -17,13 +21,161 @@ struct Cli {
 enum Commands {
     /// Print vault state, memory store stats, and keyring status
     Status,
+    /// Manage sync backend authentication
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
+    },
+    /// Sync vault with configured backend
+    Sync {
+        /// Force a specific backend (s3, onedrive, azure, gcs)
+        #[arg(long)]
+        backend: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommands {
+    /// Configure a sync backend (stores credentials in keychain)
+    Add {
+        #[command(subcommand)]
+        backend: BackendCommands,
+    },
+    /// List configured sync backends
+    List,
+    /// Remove a backend's credentials from the keychain
+    Remove { backend: String },
+}
+
+#[derive(Subcommand)]
+enum BackendCommands {
+    /// S3-compatible storage (AWS S3, Cloudflare R2, MinIO, Backblaze B2)
+    S3 {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        bucket: String,
+        /// If omitted, prompts interactively
+        #[arg(long)]
+        access_key: Option<String>,
+        /// If omitted, prompts securely (no echo)
+        #[arg(long)]
+        secret_key: Option<String>,
+    },
+    /// Microsoft OneDrive (OAuth2 browser flow)
+    Onedrive {
+        #[arg(long, default_value = "/Apps/Engram/vault")]
+        folder: String,
+    },
+    /// Azure Blob Storage
+    Azure {
+        #[arg(long)]
+        account: String,
+        #[arg(long)]
+        container: String,
+    },
+    /// Google Cloud Storage
+    Gdrive {
+        #[arg(long)]
+        bucket: String,
+        #[arg(long)]
+        key_file: String,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Status => run_status(),
+        Commands::Auth { command } => match command {
+            AuthCommands::Add { backend } => match backend {
+                BackendCommands::S3 {
+                    endpoint,
+                    bucket,
+                    access_key,
+                    secret_key,
+                } => {
+                    run_auth_add_s3(
+                        &endpoint,
+                        &bucket,
+                        access_key.as_deref(),
+                        secret_key.as_deref(),
+                    );
+                }
+                BackendCommands::Onedrive { folder } => {
+                    run_auth_add_onedrive(&folder);
+                }
+                BackendCommands::Azure { account, container } => {
+                    run_auth_add_azure(&account, &container);
+                }
+                BackendCommands::Gdrive { bucket, key_file } => {
+                    run_auth_add_gdrive(&bucket, &key_file);
+                }
+            },
+            AuthCommands::List => run_auth_list(),
+            AuthCommands::Remove { backend } => run_auth_remove(&backend),
+        },
+        Commands::Sync { backend } => run_sync(backend.as_deref()),
     }
+}
+
+fn run_auth_add_s3(
+    endpoint: &str,
+    bucket: &str,
+    access_key: Option<&str>,
+    secret_key: Option<&str>,
+) {
+    use engram_sync::auth::AuthStore;
+    use std::io::{self, Write};
+
+    let ak = access_key
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            print!("Access key ID: ");
+            io::stdout().flush().unwrap();
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            input.trim().to_string()
+        });
+
+    let sk = secret_key
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            rpassword::prompt_password("Secret access key: ").unwrap_or_default()
+        });
+
+    AuthStore::store("s3", "access_key", &ak).unwrap();
+    AuthStore::store("s3", "secret_key", &sk).unwrap();
+    AuthStore::store("s3", "endpoint", endpoint).unwrap();
+    AuthStore::store("s3", "bucket", bucket).unwrap();
+
+    println!("\u{2713} S3 backend configured");
+    println!("  Endpoint: {}", endpoint);
+    println!("  Bucket:   {}", bucket);
+}
+
+fn run_auth_add_onedrive(_folder: &str) {
+    todo!("implemented in Task 9")
+}
+
+fn run_auth_add_azure(_account: &str, _container: &str) {
+    todo!("implemented in Task 9")
+}
+
+fn run_auth_add_gdrive(_bucket: &str, _key_file: &str) {
+    todo!("implemented in Task 9")
+}
+
+fn run_auth_list() {
+    todo!("implemented in Task 10")
+}
+
+fn run_auth_remove(_backend: &str) {
+    todo!("implemented in Task 10")
+}
+
+fn run_sync(_backend: Option<&str>) {
+    todo!("implemented in Task 11")
 }
 
 /// Returns the default vault path: `~/.lifeos/memory`.
@@ -43,9 +195,9 @@ fn default_store_path() -> PathBuf {
 /// Print vault state, memory store stats, and keyring status to stdout.
 fn run_status() {
     // Separator line
-    println!("{}", "─".repeat(41));
+    println!("{}", "\u{2500}".repeat(41));
 
-    // ── Vault status ────────────────────────────────────────────────────────
+    // ── Vault status ──────────────────────────────────────────────────────────
     let vault_path = default_vault_path();
     if vault_path.exists() {
         let vault = Vault::new(&vault_path);
@@ -55,7 +207,7 @@ fn run_status() {
         println!("Vault:        {} (NOT FOUND)", vault_path.display());
     }
 
-    // ── Memory store status ─────────────────────────────────────────────────
+    // ── Memory store status ───────────────────────────────────────────────────
     let store_path = default_store_path();
     let key_store = KeyStore::new("engram");
     let key_result = key_store.retrieve();
@@ -83,7 +235,7 @@ fn run_status() {
         println!("Memory store: {} (not initialized)", store_path.display());
     }
 
-    // ── Keyring status ──────────────────────────────────────────────────────
+    // ── Keyring status ────────────────────────────────────────────────────────
     match key_result {
         Ok(_) => println!("Key:          present \u{2713}"),
         Err(_) => println!("Key:          not set"),
