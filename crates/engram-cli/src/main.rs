@@ -2,6 +2,7 @@
 
 mod daemon;
 mod load;
+mod mcp;
 mod observe;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -82,6 +83,8 @@ enum Commands {
     },
     /// Watch ~/.amplifier/projects for new session transcripts and process them automatically
     Daemon,
+    /// Start the MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
+    Mcp,
 }
 
 #[derive(Subcommand)]
@@ -174,6 +177,31 @@ fn main() {
         } => run_observe(&session_path, api_key.as_deref()),
         Commands::Load { format } => run_load(&format),
         Commands::Daemon => run_daemon(),
+        Commands::Mcp => run_mcp(),
+    }
+}
+
+/// Open the memory store and start the MCP stdio server.
+fn run_mcp() {
+    let store_path = default_store_path();
+    let key_store = KeyStore::new("engram");
+    let key = match key_store.retrieve() {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("No vault key found. Run: engram init");
+            std::process::exit(1);
+        }
+    };
+    let store = match MemoryStore::open(&store_path, &key) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Failed to open memory store: {}", e);
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = mcp::run_mcp_server(&store) {
+        eprintln!("MCP server error: {}", e);
+        std::process::exit(1);
     }
 }
 

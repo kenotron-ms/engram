@@ -534,6 +534,16 @@ fn test_daemon_help_exits_successfully() {
     cmd.assert().success();
 }
 
+// ─── engram mcp tests (Task 9) ──────────────────────────────────────────────
+
+/// `engram mcp --help` must exit 0 (mcp command is registered).
+#[test]
+fn test_mcp_help_exits_successfully() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["mcp", "--help"]);
+    cmd.assert().success();
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
