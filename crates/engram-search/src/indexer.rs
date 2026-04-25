@@ -37,8 +37,7 @@ impl TantivyIndexer {
     /// otherwise creates a new one with the expected schema.
     pub fn open(index_dir: &Path) -> Result<Self, SearchError> {
         let index = if index_dir.join("meta.json").exists() {
-            Index::open_in_dir(index_dir)
-                .map_err(|e| SearchError::Index(e.to_string()))?
+            Index::open_in_dir(index_dir).map_err(|e| SearchError::Index(e.to_string()))?
         } else {
             let mut schema_builder = Schema::builder();
             // path: exact-match indexed, stored for retrieval
@@ -49,8 +48,7 @@ impl TantivyIndexer {
             schema_builder.add_text_field("content_hash", STRING | STORED);
             let schema = schema_builder.build();
 
-            std::fs::create_dir_all(index_dir)
-                .map_err(|e| SearchError::Io(e.to_string()))?;
+            std::fs::create_dir_all(index_dir).map_err(|e| SearchError::Io(e.to_string()))?;
 
             Index::create_in_dir(index_dir, schema)
                 .map_err(|e| SearchError::Index(e.to_string()))?
@@ -64,9 +62,9 @@ impl TantivyIndexer {
         let body_field = schema
             .get_field("body")
             .map_err(|_| SearchError::Index("missing 'body' field in schema".to_string()))?;
-        let hash_field = schema
-            .get_field("content_hash")
-            .map_err(|_| SearchError::Index("missing 'content_hash' field in schema".to_string()))?;
+        let hash_field = schema.get_field("content_hash").map_err(|_| {
+            SearchError::Index("missing 'content_hash' field in schema".to_string())
+        })?;
 
         let reader = index
             .reader_builder()
@@ -312,7 +310,10 @@ mod tests {
             .unwrap();
 
         let results = indexer.search("quick brown fox", 10).unwrap();
-        assert!(!results.is_empty(), "search should find at least one result");
+        assert!(
+            !results.is_empty(),
+            "search should find at least one result"
+        );
         assert_eq!(results[0].path, "notes/test.md");
     }
 
