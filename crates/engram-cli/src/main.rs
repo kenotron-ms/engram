@@ -1,5 +1,6 @@
 // engram-cli — Personal memory assistant CLI
 
+mod daemon;
 mod load;
 mod observe;
 
