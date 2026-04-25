@@ -7,6 +7,9 @@ use engram_search::indexer::TantivyIndexer;
 use engram_search::vector::VectorIndex;
 use tempfile::TempDir;
 
+/// Maximum number of results to request from any search call in these tests.
+const MAX_RESULTS: usize = 10;
+
 /// Create a temporary vault populated with the given (relative_path, content) pairs.
 ///
 /// Returns `(TempDir, Vault)` — the caller MUST bind the `TempDir` to keep the directory alive.
@@ -65,7 +68,7 @@ fn test_full_index_and_search_round_trip() {
     );
 
     // --- Search 'kosher': only Chris.md contains that word ---
-    let results = indexer.search("kosher", 10).expect("search failed");
+    let results = indexer.search("kosher", MAX_RESULTS).expect("search failed");
     assert_eq!(results.len(), 1, "search 'kosher' should return exactly 1 result");
     assert!(
         results[0].path.contains("Chris.md"),
@@ -74,7 +77,7 @@ fn test_full_index_and_search_round_trip() {
     );
 
     // --- Search 'dietary': Chris.md and Work/Notes.md both contain the word ---
-    let results = indexer.search("dietary", 10).expect("search failed");
+    let results = indexer.search("dietary", MAX_RESULTS).expect("search failed");
     assert!(
         results.len() >= 2,
         "search 'dietary' should return at least 2 results, got {}",
@@ -93,7 +96,7 @@ fn test_search_returns_empty_for_unknown_query() {
 
     // A term that does not appear anywhere in the vault
     let results = indexer
-        .search("zxqwkjhflasdkjmnonexistent", 10)
+        .search("zxqwkjhflasdkjmnonexistent", MAX_RESULTS)
         .expect("search failed");
     assert!(
         results.is_empty(),
@@ -143,7 +146,7 @@ fn test_incremental_reindex_only_reindexes_changed_file() {
     assert_eq!(stats.skipped, 4, "third pass: 4 files should be skipped");
 
     // --- New content must be searchable ---
-    let results = indexer.search("mangoes", 10).expect("search failed");
+    let results = indexer.search("mangoes", MAX_RESULTS).expect("search failed");
     assert!(
         !results.is_empty(),
         "new content in note3.md should be searchable after re-index"
@@ -161,17 +164,15 @@ fn test_incremental_reindex_only_reindexes_changed_file() {
 /// "Sofia vegetarian" must return results that include People/Sofia.md.
 #[test]
 fn test_hybrid_search_full_round_trip() {
+    // Define content once so vault files and embeddings stay in sync.
+    let sofia_text = "Sofia is a dedicated vegetarian who enjoys Mediterranean food and follows a \
+                      plant-based diet for both ethical and health reasons.";
+    let transcript_text = "Transcript of the weekly engineering meeting discussing project \
+                           milestones, sprint velocity, and upcoming deadlines.";
+
     let (_vault_dir, vault) = make_vault(&[
-        (
-            "People/Sofia.md",
-            "Sofia is a dedicated vegetarian who enjoys Mediterranean food and follows a \
-             plant-based diet for both ethical and health reasons.",
-        ),
-        (
-            "Meeting/Transcript.md",
-            "Transcript of the weekly engineering meeting discussing project milestones, \
-             sprint velocity, and upcoming deadlines.",
-        ),
+        ("People/Sofia.md", sofia_text),
+        ("Meeting/Transcript.md", transcript_text),
         (
             "Work/Notes.md",
             "General work notes covering product roadmap, stakeholder feedback, and \
@@ -192,15 +193,11 @@ fn test_hybrid_search_full_round_trip() {
     let embedder = Embedder::new().expect("failed to initialise embedder");
 
     // Insert embeddings for Sofia.md and Transcript.md (using their vault-relative paths as IDs)
-    let sofia_text = "Sofia is a dedicated vegetarian who enjoys Mediterranean food and follows a \
-                      plant-based diet for both ethical and health reasons.";
     let sofia_embedding = embedder.embed(sofia_text).expect("embed Sofia failed");
     vector_index
         .insert("People/Sofia.md", &sofia_embedding)
         .expect("insert Sofia embedding failed");
 
-    let transcript_text = "Transcript of the weekly engineering meeting discussing project milestones, \
-                           sprint velocity, and upcoming deadlines.";
     let transcript_embedding = embedder.embed(transcript_text).expect("embed Transcript failed");
     vector_index
         .insert("Meeting/Transcript.md", &transcript_embedding)
@@ -208,7 +205,7 @@ fn test_hybrid_search_full_round_trip() {
 
     // --- Hybrid search ---
     let hybrid = HybridSearch::new(indexer, vector_index, embedder);
-    let results = hybrid.search("Sofia vegetarian", 10).expect("hybrid search failed");
+    let results = hybrid.search("Sofia vegetarian", MAX_RESULTS).expect("hybrid search failed");
 
     assert!(
         !results.is_empty(),
