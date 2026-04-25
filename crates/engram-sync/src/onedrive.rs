@@ -5,6 +5,8 @@ use bytes::Bytes;
 use reqwest::{Client, StatusCode};
 use crate::backend::{SyncBackend, SyncError};
 
+const GRAPH_DRIVE_ROOT: &str = "https://graph.microsoft.com/v1.0/me/drive/root:";
+
 pub struct OneDriveBackend {
     client: Client,
     access_token: String,
@@ -20,17 +22,14 @@ impl OneDriveBackend {
         }
     }
 
+    /// Combine the configured folder with a relative path, ensuring no double slashes.
+    fn full_path(&self, path: &str) -> String {
+        format!("{}/{}", self.folder.trim_end_matches('/'), path)
+    }
+
     /// Build the Graph API URL for file content operations.
     pub(crate) fn item_url(&self, path: &str) -> String {
-        let full_path = format!(
-            "{}/{}",
-            self.folder.trim_end_matches('/'),
-            path
-        );
-        format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:{}:/content",
-            full_path
-        )
+        format!("{}{}:/content", GRAPH_DRIVE_ROOT, self.full_path(path))
     }
 
     fn auth_header(&self) -> String {
@@ -78,15 +77,7 @@ impl SyncBackend for OneDriveBackend {
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<String>, SyncError> {
-        let folder_path = format!(
-            "{}/{}",
-            self.folder.trim_end_matches('/'),
-            prefix
-        );
-        let url = format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:{}:/children",
-            folder_path
-        );
+        let url = format!("{}{}:/children", GRAPH_DRIVE_ROOT, self.full_path(prefix));
         let response = self.client
             .get(&url)
             .header("Authorization", self.auth_header())
@@ -115,15 +106,7 @@ impl SyncBackend for OneDriveBackend {
 
     async fn delete(&self, path: &str) -> Result<(), SyncError> {
         // Use the items endpoint for delete (the content endpoint doesn't support DELETE)
-        let folder_path = format!(
-            "{}/{}",
-            self.folder.trim_end_matches('/'),
-            path
-        );
-        let url = format!(
-            "https://graph.microsoft.com/v1.0/me/drive/root:{}",
-            folder_path
-        );
+        let url = format!("{}{}", GRAPH_DRIVE_ROOT, self.full_path(path));
         let response = self.client
             .delete(&url)
             .header("Authorization", self.auth_header())
