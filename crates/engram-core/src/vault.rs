@@ -54,7 +54,7 @@ impl Vault {
     /// returning paths relative to the root with forward slashes.
     pub fn list_markdown(&self) -> Result<Vec<String>, VaultError> {
         let mut results = Vec::new();
-        self.walk_dir(&self.root.clone(), &mut results)?;
+        self.walk_dir(&self.root, &mut results)?;
         Ok(results)
     }
 
