@@ -55,13 +55,9 @@ impl SyncBackend for S3Backend {
         let result = self.store
             .get(&Path::from(path))
             .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("404") || msg.contains("not found") || msg.contains("No such file") {
-                    SyncError::NotFound(path.to_string())
-                } else {
-                    SyncError::Backend(msg)
-                }
+            .map_err(|e| match e {
+                object_store::Error::NotFound { .. } => SyncError::NotFound(path.to_string()),
+                _ => SyncError::Backend(e.to_string()),
             })?;
         let bytes = result
             .bytes()
