@@ -17,9 +17,6 @@ pub enum ObserveError {
 
     #[error("API error: {0}")]
     Api(String),
-
-    #[error("Missing API key")]
-    MissingApiKey,
 }
 
 /// A single turn in a conversation transcript.
@@ -254,6 +251,38 @@ mod tests {
         });
         let result = parse_facts_response(&fixture);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_facts_response_strips_json_markdown_fence() {
+        // Covers the ```json … ``` code path in strip_markdown_fences
+        let fixture: serde_json::Value = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "```json\n[{\"entity\":\"Sofia\",\"attribute\":\"diet\",\"value\":\"vegetarian\",\"source\":\"user\"}]\n```"
+            }]
+        });
+        let facts = parse_facts_response(&fixture).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].entity, "Sofia");
+        assert_eq!(facts[0].attribute, "diet");
+        assert_eq!(facts[0].value, "vegetarian");
+    }
+
+    #[test]
+    fn test_parse_facts_response_strips_bare_markdown_fence() {
+        // Covers the bare ``` … ``` code path in strip_markdown_fences (no "json" qualifier)
+        let fixture: serde_json::Value = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "```\n[{\"entity\":\"Paris\",\"attribute\":\"country\",\"value\":\"France\",\"source\":\"user\"}]\n```"
+            }]
+        });
+        let facts = parse_facts_response(&fixture).unwrap();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].entity, "Paris");
+        assert_eq!(facts[0].attribute, "country");
+        assert_eq!(facts[0].value, "France");
     }
 
     #[test]
