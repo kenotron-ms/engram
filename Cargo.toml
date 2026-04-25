@@ -3,5 +3,6 @@
         "crates/engram-core",
         "crates/engram-cli",
         "crates/engram-sync",
+        "crates/engram-search",
     ]
     resolver = "2"
