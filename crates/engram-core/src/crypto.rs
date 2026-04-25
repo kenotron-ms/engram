@@ -5,6 +5,8 @@ use chacha20poly1305::{
     aead::{Aead, AeadCore, KeyInit, OsRng},
     XChaCha20Poly1305, XNonce,
 };
+use hex;
+use keyring::Entry;
 use rand::RngCore;
 use thiserror::Error;
 
@@ -99,6 +101,69 @@ pub fn decrypt(key: &EngramKey, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
         .map_err(|e| CryptoError::Decryption(e.to_string()))
 }
 
+/// Manages storage and retrieval of `EngramKey` in the platform keychain.
+///
+/// Uses the `keyring` crate to interface with macOS Keychain, Windows Credential
+/// Manager, or Linux libsecret. Keys are stored as hex-encoded strings.
+pub struct KeyStore {
+    service: String,
+}
+
+impl KeyStore {
+    /// Create a new `KeyStore` bound to the given service name.
+    pub fn new(service: &str) -> Self {
+        Self {
+            service: service.to_string(),
+        }
+    }
+
+    /// Build a keyring `Entry` for this store's service.
+    fn entry(&self) -> Result<Entry, CryptoError> {
+        Entry::new(&self.service, "key").map_err(|e| CryptoError::Keyring(e.to_string()))
+    }
+
+    /// Store an `EngramKey` in the platform keychain as a hex-encoded string.
+    ///
+    /// If an entry already exists for this service, it is replaced.
+    pub fn store(&self, key: &EngramKey) -> Result<(), CryptoError> {
+        let hex_key = hex::encode(key.as_bytes());
+        let entry = self.entry()?;
+        // Delete any pre-existing entry so that set_password doesn't fail with
+        // "item already exists" on platforms that do not support upsert.
+        entry.delete_password().ok();
+        entry
+            .set_password(&hex_key)
+            .map_err(|e| CryptoError::Keyring(e.to_string()))
+    }
+
+    /// Retrieve an `EngramKey` from the platform keychain.
+    ///
+    /// Returns an error if the key does not exist or cannot be decoded.
+    pub fn retrieve(&self) -> Result<EngramKey, CryptoError> {
+        let hex_key = self
+            .entry()?
+            .get_password()
+            .map_err(|e| CryptoError::Keyring(e.to_string()))?;
+        let bytes = hex::decode(&hex_key).map_err(|e| CryptoError::Keyring(e.to_string()))?;
+        if bytes.len() != 32 {
+            return Err(CryptoError::Keyring(format!(
+                "expected 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut key_bytes = [0u8; 32];
+        key_bytes.copy_from_slice(&bytes);
+        Ok(EngramKey(key_bytes))
+    }
+
+    /// Delete the stored key from the platform keychain.
+    pub fn delete(&self) -> Result<(), CryptoError> {
+        self.entry()?
+            .delete_password()
+            .map_err(|e| CryptoError::Keyring(e.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +249,35 @@ mod tests {
             &ct2[..24],
             "each encrypt must generate a unique nonce"
         );
+    }
+
+    #[test]
+    fn test_store_and_retrieve_key() {
+        let salt = [42u8; 16];
+        let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
+        let store = KeyStore::new("engram-test-suite");
+        store.store(&key).expect("store failed");
+        let retrieved = store.retrieve().expect("retrieve failed");
+        assert_eq!(key.as_bytes(), retrieved.as_bytes(), "retrieved key must equal stored key");
+        store.delete().ok(); // cleanup
+    }
+
+    #[test]
+    fn test_retrieve_missing_key_returns_error() {
+        let store = KeyStore::new("engram-test-nonexistent-9999");
+        store.delete().ok(); // ensure clean state
+        let result = store.retrieve();
+        assert!(result.is_err(), "retrieving a missing key must return an error");
+    }
+
+    #[test]
+    fn test_delete_key_then_retrieve_fails() {
+        let salt = [42u8; 16];
+        let key = EngramKey::derive(b"test_password", &salt).expect("derive failed");
+        let store = KeyStore::new("engram-test-suite");
+        store.store(&key).expect("store failed");
+        store.delete().expect("delete failed");
+        let result = store.retrieve();
+        assert!(result.is_err(), "retrieving after delete must return an error");
     }
 }
