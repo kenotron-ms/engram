@@ -208,7 +208,10 @@ fn run_auth_add_onedrive(folder: &str) {
 
 fn run_auth_add_azure(account: &str, container: &str) {
     use engram_sync::auth::AuthStore;
+    use std::io::{self, Write};
 
+    print!("Azure Storage access key: ");
+    io::stdout().flush().unwrap();
     let ak = rpassword::prompt_password("Access key: ").unwrap_or_default();
 
     AuthStore::store("azure", "account", account).unwrap();
