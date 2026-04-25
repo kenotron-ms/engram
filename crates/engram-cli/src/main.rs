@@ -3,7 +3,8 @@
 use clap::{Parser, Subcommand};
 use directories::UserDirs;
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
-use std::path::PathBuf;
+use engram_search::indexer::TantivyIndexer;
+use std::path::{Path, PathBuf};
 
 /// Personal memory assistant
 #[derive(Parser)]
@@ -27,6 +28,15 @@ enum Commands {
         /// Force a specific backend (s3, onedrive, azure, gcs)
         #[arg(long)]
         backend: Option<String>,
+    },
+    /// Index vault markdown files for full-text search
+    Index {
+        /// Vault path (defaults to ~/.lifeos/memory)
+        #[arg(long)]
+        vault: Option<PathBuf>,
+        /// Force a full reindex by wiping the search index first
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -112,6 +122,7 @@ fn main() {
             AuthCommands::Remove { backend } => run_auth_remove(&backend),
         },
         Commands::Sync { backend } => run_sync(backend.as_deref()),
+        Commands::Index { vault, force } => run_index(vault, force),
     }
 }
 
@@ -443,6 +454,83 @@ fn default_store_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".engram/memory.db"))
 }
 
+/// Returns the default search index path: `~/.engram/search`.
+fn default_search_dir() -> PathBuf {
+    UserDirs::new()
+        .map(|u| u.home_dir().join(".engram/search"))
+        .unwrap_or_else(|| PathBuf::from(".engram/search"))
+}
+
+/// Recursively compute the total size in bytes of all files under `path`.
+/// Returns 0 if `path` does not exist or cannot be read.
+fn dir_size_bytes(path: &Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    let mut total = 0u64;
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                total += dir_size_bytes(&entry_path);
+            } else if let Ok(meta) = entry.metadata() {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Index vault markdown files for full-text search with content-hash deduplication.
+fn run_index(vault_path: Option<PathBuf>, force: bool) {
+    let vault_path = vault_path.unwrap_or_else(default_vault_path);
+
+    if !vault_path.exists() {
+        eprintln!("Vault not found: {}", vault_path.display());
+        std::process::exit(1);
+    }
+
+    let search_dir = default_search_dir();
+
+    // --force: wipe the search index so every file is reindexed from scratch.
+    if force && search_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&search_dir) {
+            eprintln!("Failed to wipe search index: {}", e);
+            std::process::exit(1);
+        }
+    }
+
+    let vault = Vault::new(&vault_path);
+
+    let mut indexer = match TantivyIndexer::open(&search_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("Failed to open search index: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let stats = match indexer.index_vault(&vault) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Indexing failed: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let index_size_mb = dir_size_bytes(&search_dir) as f64 / 1_048_576.0;
+
+    println!("{}", "─".repeat(41));
+    println!("Indexed:    {}", stats.indexed);
+    println!("Skipped:    {}", stats.skipped);
+    println!("Total:      {}", stats.total);
+    println!(
+        "Index path: {} ({:.2} MB)",
+        search_dir.display(),
+        index_size_mb
+    );
+}
+
 /// Print vault state, memory store stats, and keyring status to stdout.
 fn run_status() {
     // Separator line
@@ -517,5 +605,48 @@ mod tests {
             "store path should end with .engram/memory.db, got: {}",
             path_str
         );
+    }
+
+    #[test]
+    fn test_default_search_dir_ends_with_engram_search() {
+        let path = default_search_dir();
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".engram/search"),
+            "search dir should end with .engram/search, got: {}",
+            path_str
+        );
+    }
+
+    #[test]
+    fn test_dir_size_bytes_returns_zero_for_nonexistent_path() {
+        let size = dir_size_bytes(std::path::Path::new("/tmp/nonexistent_engram_test_dir_xyz"));
+        assert_eq!(size, 0, "nonexistent path should have size 0");
+    }
+
+    #[test]
+    fn test_dir_size_bytes_sums_file_sizes() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("a.txt"), b"hello").unwrap(); // 5 bytes
+        fs::write(dir.path().join("b.txt"), b"world!").unwrap(); // 6 bytes
+        let size = dir_size_bytes(dir.path());
+        assert_eq!(size, 11, "dir size should be sum of file sizes (5 + 6 = 11)");
+    }
+
+    #[test]
+    fn test_dir_size_bytes_recurses_into_subdirs() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("nested.txt"), b"abc").unwrap(); // 3 bytes
+        fs::write(dir.path().join("top.txt"), b"xy").unwrap(); // 2 bytes
+        let size = dir_size_bytes(dir.path());
+        assert_eq!(size, 5, "should recurse into subdirs (3 + 2 = 5)");
     }
 }
