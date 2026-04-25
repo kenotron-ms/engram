@@ -1,7 +1,7 @@
 // vault.rs — Vault file I/O module
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 /// Errors produced by Vault operations.
@@ -19,6 +19,21 @@ pub struct Vault {
     root: PathBuf,
 }
 
+/// Lexically normalize `path` by resolving `.` and `..` components without
+/// requiring the path to exist on the filesystem.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 impl Vault {
     /// Create a new `Vault` rooted at `root`.
     pub fn new(root: impl AsRef<Path>) -> Self {
@@ -33,16 +48,26 @@ impl Vault {
     }
 
     /// Read a file at `relative_path` inside the vault.
+    ///
+    /// Returns [`VaultError::PathEscape`] if the resolved path would escape the vault root.
     pub fn read(&self, relative_path: &str) -> Result<String, VaultError> {
-        let full = self.root.join(relative_path);
+        let full = normalize_path(&self.root.join(relative_path));
+        if !full.starts_with(&self.root) {
+            return Err(VaultError::PathEscape);
+        }
         let content = fs::read_to_string(full)?;
         Ok(content)
     }
 
     /// Write `content` to `relative_path` inside the vault,
     /// creating any missing parent directories.
+    ///
+    /// Returns [`VaultError::PathEscape`] if the resolved path would escape the vault root.
     pub fn write(&self, relative_path: &str, content: &str) -> Result<(), VaultError> {
-        let full = self.root.join(relative_path);
+        let full = normalize_path(&self.root.join(relative_path));
+        if !full.starts_with(&self.root) {
+            return Err(VaultError::PathEscape);
+        }
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -128,5 +153,16 @@ mod tests {
         vault.write("deep/nested/dir/file.md", "nested content").unwrap();
         let content = vault.read("deep/nested/dir/file.md").unwrap();
         assert_eq!(content, "nested content");
+    }
+
+    #[test]
+    fn test_read_escaping_path_returns_error() {
+        let (vault, _dir) = make_vault();
+        let result = vault.read("../escape.md");
+        assert!(
+            matches!(result, Err(VaultError::PathEscape)),
+            "expected PathEscape, got: {:?}",
+            result
+        );
     }
 }
