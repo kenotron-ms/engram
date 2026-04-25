@@ -154,16 +154,81 @@ fn run_auth_add_s3(
     println!("  Bucket:   {}", bucket);
 }
 
-fn run_auth_add_onedrive(_folder: &str) {
-    todo!("implemented in Task 9")
+fn run_auth_add_onedrive(folder: &str) {
+    use engram_sync::auth::AuthStore;
+    use std::io::{self, Write};
+
+    // Microsoft Identity platform — Azure CLI public client ID (public, no secret required)
+    let client_id = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+    let auth_url = format!(
+        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?\
+         client_id={}&response_type=code\
+         &redirect_uri=https://login.microsoftonline.com/common/oauth2/nativeclient\
+         &scope=Files.ReadWrite%20offline_access&response_mode=query",
+        client_id
+    );
+
+    println!("Opening browser for Microsoft authentication...");
+    println!("If browser doesn't open, visit:\n{}", auth_url);
+    open::that(&auth_url).ok();
+
+    print!("\nPaste the authorization code from the redirect URL: ");
+    io::stdout().flush().unwrap();
+    let mut code = String::new();
+    io::stdin().read_line(&mut code).unwrap();
+    let code = code.trim().to_string();
+
+    // Exchange authorization code for tokens
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .post("https://login.microsoftonline.com/common/oauth2/v2.0/token")
+        .form(&[
+            ("client_id", client_id),
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", "https://login.microsoftonline.com/common/oauth2/nativeclient"),
+            ("scope", "Files.ReadWrite offline_access"),
+        ])
+        .send()
+        .expect("Token exchange request failed");
+
+    let json: serde_json::Value = response.json().expect("Invalid token response");
+    let access_token = json["access_token"]
+        .as_str()
+        .expect("No access_token in response");
+    let refresh_token = json["refresh_token"].as_str().unwrap_or("");
+
+    AuthStore::store("onedrive", "access_token", access_token).unwrap();
+    AuthStore::store("onedrive", "refresh_token", refresh_token).unwrap();
+    AuthStore::store("onedrive", "folder", folder).unwrap();
+
+    println!("\u{2713} OneDrive backend configured");
+    println!("  Folder: {}", folder);
 }
 
-fn run_auth_add_azure(_account: &str, _container: &str) {
-    todo!("implemented in Task 9")
+fn run_auth_add_azure(account: &str, container: &str) {
+    use engram_sync::auth::AuthStore;
+
+    let ak = rpassword::prompt_password("Access key: ").unwrap_or_default();
+
+    AuthStore::store("azure", "account", account).unwrap();
+    AuthStore::store("azure", "container", container).unwrap();
+    AuthStore::store("azure", "access_key", &ak).unwrap();
+
+    println!("\u{2713} Azure backend configured");
+    println!("  Account:   {}", account);
+    println!("  Container: {}", container);
 }
 
-fn run_auth_add_gdrive(_bucket: &str, _key_file: &str) {
-    todo!("implemented in Task 9")
+fn run_auth_add_gdrive(bucket: &str, key_file: &str) {
+    use engram_sync::auth::AuthStore;
+
+    AuthStore::store("gcs", "bucket", bucket).unwrap();
+    AuthStore::store("gcs", "key_file", key_file).unwrap();
+
+    println!("\u{2713} GCS backend configured");
+    println!("  Bucket:   {}", bucket);
+    println!("  Key file: {}", key_file);
 }
 
 fn run_auth_list() {

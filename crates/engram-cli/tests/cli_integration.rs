@@ -133,6 +133,89 @@ fn test_sync_subcommand_help_shows_backend_flag() {
         .stdout(predicate::str::contains("--backend"));
 }
 
+// ── OneDrive / Azure / GCS backend flag tests ─────────────────────────────────
+
+/// `engram auth add onedrive --help` must show the --folder flag.
+#[test]
+fn test_auth_add_onedrive_help_shows_folder_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "add", "onedrive", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--folder"));
+}
+
+/// `engram auth add azure --help` must show the --account and --container flags.
+#[test]
+fn test_auth_add_azure_help_shows_account_and_container_flags() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "add", "azure", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--account"))
+        .stdout(predicate::str::contains("--container"));
+}
+
+/// `engram auth add gdrive --help` must show the --bucket and --key-file flags.
+#[test]
+fn test_auth_add_gdrive_help_shows_bucket_and_key_file_flags() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "add", "gdrive", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--bucket"))
+        .stdout(predicate::str::contains("--key-file"));
+}
+
+/// `engram auth add gdrive` with valid args must print ✓ GCS backend configured.
+/// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
+#[test]
+#[ignore = "requires keychain access; run with cargo test -- --include-ignored in a GUI session"]
+fn test_auth_add_gdrive_prints_confirmation() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args([
+        "auth",
+        "add",
+        "gdrive",
+        "--bucket",
+        "test-bucket",
+        "--key-file",
+        "/tmp/test-key.json",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713} GCS backend configured"))
+        .stdout(predicate::str::contains("test-bucket"))
+        .stdout(predicate::str::contains("/tmp/test-key.json"));
+}
+
+/// `engram auth add azure` with valid args must print ✓ Azure backend configured.
+/// Marked ignore because it writes to the platform keychain and requires interactive
+/// rpassword input (requires GUI session on macOS).
+#[test]
+#[ignore = "requires keychain access and interactive input; run with cargo test -- --include-ignored in a GUI session"]
+fn test_auth_add_azure_prints_confirmation() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args([
+        "auth",
+        "add",
+        "azure",
+        "--account",
+        "test-account",
+        "--container",
+        "test-container",
+    ]);
+    // rpassword reads from TTY; pipe an empty line as fallback
+    cmd.write_stdin("test-access-key\n");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\u{2713} Azure backend configured"))
+        .stdout(predicate::str::contains("test-account"))
+        .stdout(predicate::str::contains("test-container"));
+}
+
+// ── S3 confirmation test (existing) ────────────────────────────────────────────
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
