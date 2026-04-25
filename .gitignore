@@ -89,3 +89,7 @@ Icon
 
 # Hatch
 .hatch/
+
+# fastembed local model cache (populated by tests/runtime; ~90 MB binary weights)
+.fastembed_cache/
+*/.fastembed_cache/

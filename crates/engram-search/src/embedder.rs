@@ -7,8 +7,7 @@ use crate::SearchError;
 /// Wraps a fastembed TextEmbedding model for producing dense vector embeddings.
 ///
 /// Uses AllMiniLML6V2, which produces 384-dimensional float vectors.
-/// Model files (~90 MB) are downloaded to `~/.cache/huggingface` on first use
-/// and reused on subsequent calls.
+/// Model weights (~90 MB) are downloaded on first use and cached locally thereafter.
 pub struct Embedder {
     model: TextEmbedding,
 }
