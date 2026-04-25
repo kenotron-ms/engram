@@ -24,6 +24,8 @@ pub enum ObserveError {
 pub struct TranscriptTurn {
     pub role: String,
     pub content: String,
+    // Retained for test assertions and potential future deduplication; not yet used in production paths.
+    #[allow(dead_code)]
     pub timestamp: Option<i64>,
 }
 
