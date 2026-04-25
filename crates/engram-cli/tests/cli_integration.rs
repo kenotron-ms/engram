@@ -216,6 +216,97 @@ fn test_auth_add_azure_prints_confirmation() {
 
 // ── S3 confirmation test (existing) ────────────────────────────────────────────
 
+// ── auth list / auth remove tests (Task 10) ─────────────────────────────────
+
+/// `engram auth list` must exit 0 and print either backend info or "No backends configured".
+#[test]
+fn test_auth_list_exits_successfully() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "list"]);
+    cmd.assert().success();
+}
+
+/// `engram auth list` with no backends configured must show the "No backends configured" message.
+/// This is a clean-system test — no keychain writes, always safe to run.
+#[test]
+fn test_auth_list_shows_no_backends_when_none_configured() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "list"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // On a system with no configured backends this message must appear;
+    // on a system that happens to have backends it will show ✓ lines instead.
+    // Either way the command must succeed and print something meaningful.
+    assert!(
+        stdout.contains("No backends configured.") || stdout.contains("✓"),
+        "auth list must show 'No backends configured.' or a ✓ backend entry, got: {}",
+        stdout
+    );
+}
+
+/// `engram auth list` must print the separator line (same as status).
+#[test]
+fn test_auth_list_shows_separator() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "list"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("─────────────────────────────────────────"));
+}
+
+/// `engram auth list` must print the "Configured sync backends:" header.
+#[test]
+fn test_auth_list_shows_header() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "list"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Configured sync backends:"));
+}
+
+/// `engram auth remove` with an unknown backend must exit with a non-zero code.
+#[test]
+fn test_auth_remove_unknown_backend_exits_nonzero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "remove", "unknown-backend-xyz"]);
+    cmd.assert().failure();
+}
+
+/// `engram auth remove` with an unknown backend must print an error message to stderr.
+#[test]
+fn test_auth_remove_unknown_backend_prints_error() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "remove", "unknown-backend-xyz"]);
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("Unknown backend: unknown-backend-xyz"));
+}
+
+/// `engram auth remove` with a known but unconfigured backend must exit 0 and say "No credentials found".
+#[test]
+fn test_auth_remove_known_unconfigured_backend_exits_zero() {
+    // We assume s3 is NOT configured on the test machine.
+    // If it is, this test is still valid — it just verifies we don't crash.
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "remove", "s3"]);
+    // Must exit 0 (graceful when there's nothing to remove)
+    cmd.assert().success();
+}
+
+/// `engram auth remove` with a known but unconfigured backend must print "No credentials found" or "Removed".
+#[test]
+fn test_auth_remove_known_unconfigured_backend_prints_message() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["auth", "remove", "s3"]);
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No credentials found for s3") || stdout.contains("✓ Removed s3"),
+        "auth remove s3 must say 'No credentials found for s3' or '✓ Removed s3', got: {}",
+        stdout
+    );
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]

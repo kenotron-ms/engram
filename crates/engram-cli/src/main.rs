@@ -235,11 +235,75 @@ fn run_auth_add_gdrive(bucket: &str, key_file: &str) {
 }
 
 fn run_auth_list() {
-    todo!("implemented in Task 10")
+    use engram_sync::auth::AuthStore;
+
+    // (backend_name, required_keys_for_is_configured, display_keys_non_sensitive)
+    let backends: &[(&str, &[&str], &[&str])] = &[
+        ("s3",       &["access_key", "secret_key", "endpoint", "bucket"], &["endpoint", "bucket"]),
+        ("onedrive", &["access_token", "folder"],                         &["folder"]),
+        ("azure",    &["account", "container"],                           &["account", "container"]),
+        ("gcs",      &["bucket", "key_file"],                             &["bucket", "key_file"]),
+    ];
+
+    println!("{}", "─".repeat(41));
+    println!("Configured sync backends:");
+    println!();
+
+    let mut any_configured = false;
+    for (backend, required, display_keys) in backends {
+        if AuthStore::is_configured(backend, required) {
+            let details = display_keys
+                .iter()
+                .filter_map(|k| {
+                    AuthStore::retrieve(backend, k)
+                        .ok()
+                        .map(|v| format!("{}={}", k, v))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("  ✓ {} ({})", backend, details);
+            any_configured = true;
+        }
+    }
+
+    if !any_configured {
+        println!("  No backends configured.");
+        println!();
+        println!("  Run: engram auth add s3|onedrive|azure|gdrive");
+    }
+    println!();
 }
 
-fn run_auth_remove(_backend: &str) {
-    todo!("implemented in Task 10")
+fn run_auth_remove(backend: &str) {
+    use engram_sync::auth::AuthStore;
+    use std::collections::HashMap;
+
+    let keys_by_backend: HashMap<&str, &[&str]> = [
+        ("s3",       ["access_key", "secret_key", "endpoint", "bucket"].as_slice()),
+        ("onedrive", ["access_token", "refresh_token", "folder"].as_slice()),
+        ("azure",    ["account", "access_key", "container"].as_slice()),
+        ("gcs",      ["bucket", "key_file"].as_slice()),
+    ]
+    .into_iter()
+    .collect();
+
+    match keys_by_backend.get(backend) {
+        None => {
+            eprintln!("Unknown backend: {}. Valid options: s3, onedrive, azure, gcs", backend);
+            std::process::exit(1);
+        }
+        Some(keys) => {
+            let removed = keys
+                .iter()
+                .filter(|k| AuthStore::delete(backend, k).is_ok())
+                .count();
+            if removed > 0 {
+                println!("✓ Removed {} backend credentials", backend);
+            } else {
+                println!("No credentials found for {}", backend);
+            }
+        }
+    }
 }
 
 fn run_sync(_backend: Option<&str>) {
