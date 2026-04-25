@@ -306,8 +306,111 @@ fn run_auth_remove(backend: &str) {
     }
 }
 
-fn run_sync(_backend: Option<&str>) {
-    todo!("implemented in Task 11")
+fn run_sync(backend_name: Option<&str>) {
+    use engram_core::{crypto::KeyStore, vault::Vault};
+    use engram_sync::{
+        auth::AuthStore,
+        backend::SyncBackend,
+        encrypt::encrypt_for_sync,
+        onedrive::OneDriveBackend,
+        s3::S3Backend,
+    };
+
+    let vault_path = default_vault_path();
+    let vault = Vault::new(&vault_path);
+    let key_store = KeyStore::new("engram");
+
+    let key = match key_store.retrieve() {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("No vault key found. Run: engram init");
+            std::process::exit(1);
+        }
+    };
+
+    // Determine which backend to use: explicit arg → first configured → error
+    let effective_backend = backend_name.unwrap_or_else(|| {
+        if AuthStore::is_configured("s3", &["access_key", "secret_key", "endpoint", "bucket"]) {
+            "s3"
+        } else if AuthStore::is_configured("onedrive", &["access_token", "folder"]) {
+            "onedrive"
+        } else if AuthStore::is_configured("azure", &["account", "container", "access_key"]) {
+            "azure"
+        } else if AuthStore::is_configured("gcs", &["bucket", "key_file"]) {
+            "gcs"
+        } else {
+            eprintln!("No sync backend configured. Run: engram auth add s3|onedrive|azure|gdrive");
+            std::process::exit(1);
+        }
+    });
+
+    let backend: Box<dyn SyncBackend> = match effective_backend {
+        "s3" => {
+            let endpoint = AuthStore::retrieve("s3", "endpoint").unwrap();
+            let bucket   = AuthStore::retrieve("s3", "bucket").unwrap();
+            let ak       = AuthStore::retrieve("s3", "access_key").unwrap();
+            let sk       = AuthStore::retrieve("s3", "secret_key").unwrap();
+            Box::new(S3Backend::new(&endpoint, &bucket, &ak, &sk).unwrap())
+        }
+        "onedrive" => {
+            let token  = AuthStore::retrieve("onedrive", "access_token").unwrap();
+            let folder = AuthStore::retrieve("onedrive", "folder").unwrap();
+            Box::new(OneDriveBackend::new(&token, &folder))
+        }
+        other => {
+            eprintln!("Backend '{}' is not yet supported in engram sync. Use: s3, onedrive", other);
+            std::process::exit(1);
+        }
+    };
+
+    let files = match vault.list_markdown() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Failed to list vault files: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!("Syncing {} files via {} ...", files.len(), effective_backend);
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut success = 0usize;
+    let mut errors = 0usize;
+
+    for relative_path in &files {
+        let content = match vault.read(relative_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("  ✗ {}: {}", relative_path, e);
+                errors += 1;
+                continue;
+            }
+        };
+        let encrypted = match encrypt_for_sync(&key, content.as_bytes()) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("  ✗ {}: encryption failed — {}", relative_path, e);
+                errors += 1;
+                continue;
+            }
+        };
+        match runtime.block_on(backend.push(relative_path, encrypted)) {
+            Ok(_) => {
+                success += 1;
+            }
+            Err(e) => {
+                eprintln!("  ✗ {}: {}", relative_path, e);
+                errors += 1;
+            }
+        }
+    }
+
+    println!("{}", "─".repeat(41));
+    println!("Pushed:  {} files", success);
+    if errors > 0 {
+        eprintln!("Errors:  {} files", errors);
+        std::process::exit(1);
+    }
 }
 
 /// Returns the default vault path: `~/.lifeos/memory`.

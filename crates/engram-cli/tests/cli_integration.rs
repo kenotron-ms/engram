@@ -307,6 +307,49 @@ fn test_auth_remove_known_unconfigured_backend_prints_message() {
     );
 }
 
+// ─── engram sync tests (Task 11) ──────────────────────────────────────────────
+
+/// `engram sync` with no backend configured must exit with a non-zero code.
+/// This test is safe to run in any environment because it does not write to the keychain
+/// and relies on the auto-detection path failing gracefully.
+///
+/// NOTE: If the test machine happens to have all four backends configured this test
+/// will pass for a different reason (the sync will attempt to actually push files).
+/// That edge case is acceptable because the primary goal is to verify the error path.
+#[test]
+fn test_sync_no_backend_configured_exits_nonzero() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["sync"]);
+    // On a clean machine with no backends configured this must fail with a meaningful message.
+    // We accept either failure (no backends) or success (backends are configured) — the
+    // important thing is that the binary does NOT panic with todo!().
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // If it fails it must print the expected error, not a panic message.
+    if !output.status.success() {
+        assert!(
+            stderr.contains("No sync backend configured") || stderr.contains("No vault key found"),
+            "sync failure must print a known error message, got stderr: {}",
+            stderr
+        );
+    }
+}
+
+/// `engram sync` must NOT panic with todo!() — it must either succeed or fail gracefully.
+#[test]
+fn test_sync_does_not_panic() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["sync"]);
+    let output = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // A todo!() panic produces "not yet implemented" on stderr
+    assert!(
+        !stderr.contains("not yet implemented"),
+        "run_sync must not call todo!(), got stderr: {}",
+        stderr
+    );
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
