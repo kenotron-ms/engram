@@ -490,8 +490,10 @@ fn run_auth_remove(backend: &str) {
 }
 
 fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) {
-    // vault_arg and approve are reserved for future tasks (7-8); stub them out here.
-    let _ = vault_arg;
+    // Check write access before any backend logic.
+    let vault_name = resolve_vault_name(vault_arg);
+    check_write_access(&vault_name);
+
     let _ = approve;
     use engram_core::{crypto::KeyStore, vault::Vault};
     use engram_sync::{
@@ -1059,8 +1061,38 @@ fn run_load(format: &str) {
     }
 }
 
+/// Check that the named vault allows write access.
+///
+/// Loads the config and looks up `vault_name`:
+/// - If the vault is registered with `access = "read"`, prints a clear error
+///   message and exits with code 1.
+/// - If the vault is not registered in the config (auto-detected project vault),
+///   write access is always permitted.
+/// - If the vault is registered with `access = "read-write"`, the function
+///   returns normally.
+fn check_write_access(vault_name: &str) {
+    let config = EngramConfig::load();
+    if let Some(entry) = config.get_vault(vault_name) {
+        if entry.access == VaultAccess::Read {
+            eprintln!(
+                "Error: vault '{}' is read-only. \
+                 To allow write operations, re-add the vault with: \
+                 engram vault add {} --path <path> --access read-write",
+                vault_name, vault_name
+            );
+            std::process::exit(1);
+        }
+    }
+    // Auto-detected project vaults (not in config) always pass the access check.
+}
+
 /// Observe a session transcript: parse turns, extract facts via LLM, write to store.
 fn run_observe(session_path: &Path, api_key: Option<&str>) {
+    // Check write access before anything else (before API key validation).
+    // observe uses resolve_vault(None) — resolve the vault name the same way.
+    let vault_name = resolve_vault_name(None);
+    check_write_access(&vault_name);
+
     // Resolve API key — required for LLM fact extraction.
     let api_key = match api_key {
         Some(k) if !k.is_empty() => k.to_string(),
