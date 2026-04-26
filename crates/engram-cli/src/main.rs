@@ -848,6 +848,7 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
                 Ok(b) => Box::new(b),
                 Err(e) => {
                     eprintln!("Failed to initialize S3 backend: {}", e);
+                    eprintln!("Check the endpoint URL and credentials in ~/.engram/config.toml");
                     std::process::exit(1);
                 }
             }
