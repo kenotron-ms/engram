@@ -73,7 +73,7 @@ default = true
 /// `engram vault add` with --path and --sync-mode auto --default creates
 /// an entry in the config file with the correct name and sync mode.
 #[test]
-fn test_vault_add_creates_entry_in_config() {
+fn test_vault_list_add_creates_entry_in_config() {
     let dir = TempDir::new().unwrap();
     let config_path = write_config(dir.path(), "");
     // Use the temp dir itself as the vault path (it exists on disk).
@@ -107,7 +107,7 @@ fn test_vault_add_creates_entry_in_config() {
 
 /// `engram vault remove temp` removes the [vaults.temp] entry from the config.
 #[test]
-fn test_vault_remove_deletes_entry() {
+fn test_vault_list_remove_deletes_entry() {
     let dir = TempDir::new().unwrap();
     let toml = r#"
 [vaults.temp]
@@ -133,7 +133,7 @@ default = false
 /// `engram vault set-default beta` updates the default vault to beta;
 /// beta must still appear in the config.
 #[test]
-fn test_vault_set_default_updates_config() {
+fn test_vault_list_set_default_updates_config() {
     let dir = TempDir::new().unwrap();
     let toml = r#"
 [vaults.alpha]
@@ -164,7 +164,7 @@ default = false
 
 /// `engram vault remove` with a nonexistent vault name must exit nonzero.
 #[test]
-fn test_vault_remove_nonexistent_exits_nonzero() {
+fn test_vault_list_remove_nonexistent_exits_nonzero() {
     let dir = TempDir::new().unwrap();
     let config_path = write_config(dir.path(), "");
 
