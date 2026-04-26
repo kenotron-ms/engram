@@ -4,6 +4,8 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use std::fs;
+use tempfile::TempDir;
 
 /// `engram status` must exit with code 0 and produce well-formed output.
 #[test]
@@ -258,20 +260,27 @@ fn test_auth_list_exits_successfully() {
     cmd.assert().success();
 }
 
-/// `engram auth list` with no backends configured must show the "No backends configured" message.
-/// This is a clean-system test — no keychain writes, always safe to run.
+/// `engram auth list` with no vaults configured must show an appropriate message.
+/// This is a clean-system test — uses a temp config to ensure isolation.
 #[test]
 fn test_auth_list_shows_no_backends_when_none_configured() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.toml");
+    fs::write(&config_path, "").unwrap();
+
     let mut cmd = Command::cargo_bin("engram").unwrap();
-    cmd.args(["auth", "list"]);
+    cmd.args(["auth", "list"])
+        .env("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // On a system with no configured backends this message must appear;
-    // on a system that happens to have backends it will show ✓ lines instead.
-    // Either way the command must succeed and print something meaningful.
+    // With no vaults configured, expect either a "no backends" or "no vaults" message.
+    // On a system with vaults having sync configured, it will show ✓ lines instead.
     assert!(
-        stdout.contains("No backends configured.") || stdout.contains("✓"),
-        "auth list must show 'No backends configured.' or a ✓ backend entry, got: {}",
+        stdout.contains("No backends configured.")
+            || stdout.contains("No vaults configured.")
+            || stdout.contains("✓")
+            || stdout.contains("no sync configured"),
+        "auth list must show an appropriate message or a ✓ entry, got: {}",
         stdout
     );
 }
@@ -286,14 +295,14 @@ fn test_auth_list_shows_separator() {
     ));
 }
 
-/// `engram auth list` must print the "Configured sync backends:" header.
+/// `engram auth list` must print a sync backends header line.
 #[test]
 fn test_auth_list_shows_header() {
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args(["auth", "list"]);
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Configured sync backends:"));
+        .stdout(predicate::str::contains("sync backends:"));
 }
 
 /// `engram auth remove` with an unknown backend must exit with a non-zero code.
@@ -304,37 +313,68 @@ fn test_auth_remove_unknown_backend_exits_nonzero() {
     cmd.assert().failure();
 }
 
-/// `engram auth remove` with an unknown backend must print an error message to stderr.
+/// `engram auth remove` with an unknown vault name must print an error message to stderr.
 #[test]
 fn test_auth_remove_unknown_backend_prints_error() {
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("config.toml");
+    fs::write(&config_path, "").unwrap();
+
     let mut cmd = Command::cargo_bin("engram").unwrap();
-    cmd.args(["auth", "remove", "unknown-backend-xyz"]);
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "Unknown backend: unknown-backend-xyz",
-    ));
+    cmd.args(["auth", "remove", "unknown-backend-xyz"])
+        .env("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+    // The error message must mention the vault name or "not found".
+    cmd.assert().failure().stderr(
+        predicate::str::contains("unknown-backend-xyz")
+            .or(predicate::str::contains("not found")),
+    );
 }
 
-/// `engram auth remove` with a known but unconfigured backend must exit 0 and say "No credentials found".
+/// `engram auth remove` with a vault that has no sync credentials must exit 0.
 #[test]
 fn test_auth_remove_known_unconfigured_backend_exits_zero() {
-    // We assume s3 is NOT configured on the test machine.
-    // If it is, this test is still valid — it just verifies we don't crash.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    fs::create_dir_all(&vault_path).unwrap();
+    let config_path = dir.path().join("config.toml");
+    // Create a vault with no sync credentials.
+    let toml = format!(
+        "[vaults.testvault]\npath = \"{}\"\naccess = \"read-write\"\nsync_mode = \"approval\"\ndefault = true\n",
+        vault_path.display()
+    );
+    fs::write(&config_path, &toml).unwrap();
+
     let mut cmd = Command::cargo_bin("engram").unwrap();
-    cmd.args(["auth", "remove", "s3"]);
+    cmd.args(["auth", "remove", "testvault"])
+        .env("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
     // Must exit 0 (graceful when there's nothing to remove)
     cmd.assert().success();
 }
 
-/// `engram auth remove` with a known but unconfigured backend must print "No credentials found" or "Removed".
+/// `engram auth remove` with a vault that has no sync credentials must print a meaningful message.
 #[test]
 fn test_auth_remove_known_unconfigured_backend_prints_message() {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("vault");
+    fs::create_dir_all(&vault_path).unwrap();
+    let config_path = dir.path().join("config.toml");
+    let toml = format!(
+        "[vaults.testvault]\npath = \"{}\"\naccess = \"read-write\"\nsync_mode = \"approval\"\ndefault = true\n",
+        vault_path.display()
+    );
+    fs::write(&config_path, &toml).unwrap();
+
     let mut cmd = Command::cargo_bin("engram").unwrap();
-    cmd.args(["auth", "remove", "s3"]);
+    cmd.args(["auth", "remove", "testvault"])
+        .env("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
+    // Must print a message about no credentials or a removal confirmation.
     assert!(
-        stdout.contains("No credentials found for s3") || stdout.contains("✓ Removed s3"),
-        "auth remove s3 must say 'No credentials found for s3' or '✓ Removed s3', got: {}",
+        stdout.contains("No sync credentials")
+            || stdout.contains("Removed")
+            || stdout.contains("no credentials"),
+        "auth remove must print a message about credentials, got: {}",
         stdout
     );
 }

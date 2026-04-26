@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
-use engram_core::config::{EngramConfig, SyncMode, VaultAccess, VaultEntry};
+use engram_core::config::{EngramConfig, SyncCredentials, SyncMode, VaultAccess, VaultEntry};
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
@@ -176,6 +176,9 @@ enum AuthCommands {
 enum BackendCommands {
     /// S3-compatible storage (AWS S3, Cloudflare R2, MinIO, Backblaze B2)
     S3 {
+        /// Vault name to configure (defaults to the configured default vault)
+        #[arg(long, default_value = "")]
+        vault: String,
         #[arg(long)]
         endpoint: String,
         #[arg(long)]
@@ -194,6 +197,9 @@ enum BackendCommands {
     },
     /// Azure Blob Storage
     Azure {
+        /// Vault name to configure (defaults to the configured default vault)
+        #[arg(long, default_value = "")]
+        vault: String,
         #[arg(long)]
         account: String,
         #[arg(long)]
@@ -201,6 +207,9 @@ enum BackendCommands {
     },
     /// Google Cloud Storage
     Gdrive {
+        /// Vault name to configure (defaults to the configured default vault)
+        #[arg(long, default_value = "")]
+        vault: String,
         #[arg(long)]
         bucket: String,
         #[arg(long)]
@@ -216,12 +225,14 @@ fn main() {
         Commands::Auth { command } => match command {
             AuthCommands::Add { backend } => match backend {
                 BackendCommands::S3 {
+                    vault,
                     endpoint,
                     bucket,
                     access_key,
                     secret_key,
                 } => {
                     run_auth_add_s3(
+                        &vault,
                         &endpoint,
                         &bucket,
                         access_key.as_deref(),
@@ -231,11 +242,19 @@ fn main() {
                 BackendCommands::Onedrive { folder } => {
                     run_auth_add_onedrive(&folder);
                 }
-                BackendCommands::Azure { account, container } => {
-                    run_auth_add_azure(&account, &container);
+                BackendCommands::Azure {
+                    vault,
+                    account,
+                    container,
+                } => {
+                    run_auth_add_azure(&vault, &account, &container);
                 }
-                BackendCommands::Gdrive { bucket, key_file } => {
-                    run_auth_add_gdrive(&bucket, &key_file);
+                BackendCommands::Gdrive {
+                    vault,
+                    bucket,
+                    key_file,
+                } => {
+                    run_auth_add_gdrive(&vault, &bucket, &key_file);
                 }
             },
             AuthCommands::List => run_auth_list(),
@@ -408,12 +427,12 @@ fn run_mcp() {
 }
 
 fn run_auth_add_s3(
+    vault_arg: &str,
     endpoint: &str,
     bucket: &str,
     access_key: Option<&str>,
     secret_key: Option<&str>,
 ) {
-    use engram_sync::auth::AuthStore;
     use std::io::{self, Write};
 
     let ak = access_key.map(|s| s.to_string()).unwrap_or_else(|| {
@@ -428,37 +447,37 @@ fn run_auth_add_s3(
         .map(|s| s.to_string())
         .unwrap_or_else(|| rpassword::prompt_password("Secret access key: ").unwrap_or_default());
 
-    let mut keychain_ok = true;
-    if let Err(e) = AuthStore::store("s3", "access_key", &ak) {
-        eprintln!("Warning: could not store credential in system keychain: {}", e);
-        keychain_ok = false;
-    }
-    if let Err(e) = AuthStore::store("s3", "secret_key", &sk) {
-        eprintln!("Warning: could not store credential in system keychain: {}", e);
-        keychain_ok = false;
-    }
-    if let Err(e) = AuthStore::store("s3", "endpoint", endpoint) {
-        eprintln!("Warning: could not store credential in system keychain: {}", e);
-        keychain_ok = false;
-    }
-    if let Err(e) = AuthStore::store("s3", "bucket", bucket) {
-        eprintln!("Warning: could not store credential in system keychain: {}", e);
-        keychain_ok = false;
-    }
-    if !keychain_ok {
-        eprintln!("Tip: set these environment variables as a fallback:");
-        eprintln!(
-            "  ENGRAM_S3_ACCESS_KEY, ENGRAM_S3_SECRET_KEY, ENGRAM_S3_ENDPOINT, ENGRAM_S3_BUCKET"
-        );
+    let vault_name = resolve_auth_vault_name(vault_arg);
+    let mut config = EngramConfig::load();
+
+    match config.vaults.get_mut(&vault_name) {
+        None => {
+            eprintln!("Vault '{}' not found in config.", vault_name);
+            std::process::exit(1);
+        }
+        Some(vault) => {
+            vault.sync = Some(SyncCredentials {
+                backend: "s3".to_string(),
+                endpoint: Some(endpoint.to_string()),
+                bucket: Some(bucket.to_string()),
+                access_key: Some(ak),
+                secret_key: Some(sk),
+                ..Default::default()
+            });
+        }
     }
 
-    println!("\u{2713} S3 backend configured");
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\u{2713} S3 backend configured for vault '{}'", vault_name);
     println!("  Endpoint: {}", endpoint);
     println!("  Bucket:   {}", bucket);
 }
 
 fn run_auth_add_onedrive(folder: &str) {
-    use engram_sync::auth::AuthStore;
     use std::io::{self, Write};
 
     // Microsoft Identity platform — Azure CLI public client ID (public, no secret required)
@@ -502,168 +521,176 @@ fn run_auth_add_onedrive(folder: &str) {
     let access_token = json["access_token"]
         .as_str()
         .expect("No access_token in response");
-    let refresh_token = json["refresh_token"].as_str().unwrap_or("");
+    let refresh_token = json["refresh_token"].as_str().unwrap_or("").to_string();
+    let access_token = access_token.to_string();
 
-    let mut keychain_ok = true;
-    if let Err(e) = AuthStore::store("onedrive", "access_token", access_token) {
-        eprintln!(
-            "Warning: could not store OneDrive token in system keychain: {}",
-            e
-        );
-        keychain_ok = false;
-    }
-    if let Err(e) = AuthStore::store("onedrive", "refresh_token", refresh_token) {
-        eprintln!(
-            "Warning: could not store OneDrive refresh token in system keychain: {}",
-            e
-        );
-        keychain_ok = false;
-    }
-    if let Err(e) = AuthStore::store("onedrive", "folder", folder) {
-        eprintln!(
-            "Warning: could not store OneDrive folder in system keychain: {}",
-            e
-        );
-        keychain_ok = false;
-    }
-    if !keychain_ok {
-        eprintln!("Tip: set ENGRAM_ONEDRIVE_TOKEN as a fallback environment variable.");
+    // Resolve the default vault and write credentials to config.
+    let vault_name = resolve_auth_vault_name("");
+    let mut config = EngramConfig::load();
+
+    match config.vaults.get_mut(&vault_name) {
+        None => {
+            eprintln!("Vault '{}' not found in config.", vault_name);
+            std::process::exit(1);
+        }
+        Some(vault) => {
+            vault.sync = Some(SyncCredentials {
+                backend: "onedrive".to_string(),
+                access_token: Some(access_token),
+                refresh_token: Some(refresh_token),
+                folder: Some(folder.to_string()),
+                ..Default::default()
+            });
+        }
     }
 
-    println!("\u{2713} OneDrive backend configured");
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\u{2713} OneDrive backend configured for vault '{}'", vault_name);
     println!("  Folder: {}", folder);
 }
 
-fn run_auth_add_azure(account: &str, container: &str) {
-    use engram_sync::auth::AuthStore;
-    use std::io::{self, Write};
-
-    print!("Azure Storage access key: ");
-    io::stdout().flush().unwrap();
+fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
     let ak = rpassword::prompt_password("Access key: ").unwrap_or_default();
 
-    if let Err(e) = AuthStore::store("azure", "account", account) {
-        eprintln!(
-            "Warning: could not store Azure account in system keychain: {}",
-            e
-        );
-    }
-    if let Err(e) = AuthStore::store("azure", "container", container) {
-        eprintln!(
-            "Warning: could not store Azure container in system keychain: {}",
-            e
-        );
-    }
-    if let Err(e) = AuthStore::store("azure", "access_key", &ak) {
-        eprintln!(
-            "Warning: could not store Azure access key in system keychain: {}",
-            e
-        );
+    let vault_name = resolve_auth_vault_name(vault_arg);
+    let mut config = EngramConfig::load();
+
+    match config.vaults.get_mut(&vault_name) {
+        None => {
+            eprintln!("Vault '{}' not found in config.", vault_name);
+            std::process::exit(1);
+        }
+        Some(vault) => {
+            vault.sync = Some(SyncCredentials {
+                backend: "azure".to_string(),
+                account: Some(account.to_string()),
+                container: Some(container.to_string()),
+                access_key: Some(ak),
+                ..Default::default()
+            });
+        }
     }
 
-    println!("\u{2713} Azure backend configured");
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\u{2713} Azure backend configured for vault '{}'", vault_name);
     println!("  Account:   {}", account);
     println!("  Container: {}", container);
 }
 
-fn run_auth_add_gdrive(bucket: &str, key_file: &str) {
-    use engram_sync::auth::AuthStore;
+fn run_auth_add_gdrive(vault_arg: &str, bucket: &str, key_file: &str) {
+    let vault_name = resolve_auth_vault_name(vault_arg);
+    let mut config = EngramConfig::load();
 
-    AuthStore::store("gcs", "bucket", bucket).unwrap();
-    AuthStore::store("gcs", "key_file", key_file).unwrap();
+    match config.vaults.get_mut(&vault_name) {
+        None => {
+            eprintln!("Vault '{}' not found in config.", vault_name);
+            std::process::exit(1);
+        }
+        Some(vault) => {
+            vault.sync = Some(SyncCredentials {
+                backend: "gcs".to_string(),
+                bucket: Some(bucket.to_string()),
+                // Reuse access_key field for the key file path.
+                access_key: Some(key_file.to_string()),
+                ..Default::default()
+            });
+        }
+    }
 
-    println!("\u{2713} GCS backend configured");
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\u{2713} GCS backend configured for vault '{}'", vault_name);
     println!("  Bucket:   {}", bucket);
     println!("  Key file: {}", key_file);
 }
 
 fn run_auth_list() {
-    use engram_sync::auth::AuthStore;
-
-    // (backend_name, required_keys_for_is_configured, display_keys_non_sensitive)
-    let backends: &[(&str, &[&str], &[&str])] = &[
-        (
-            "s3",
-            &["access_key", "secret_key", "endpoint", "bucket"],
-            &["endpoint", "bucket"],
-        ),
-        ("onedrive", &["access_token", "folder"], &["folder"]),
-        (
-            "azure",
-            &["account", "container"],
-            &["account", "container"],
-        ),
-        ("gcs", &["bucket", "key_file"], &["bucket", "key_file"]),
-    ];
+    let config = EngramConfig::load();
 
     println!("{}", "─".repeat(41));
-    println!("Configured sync backends:");
+    println!("Vault sync backends:");
     println!();
 
+    if config.vaults.is_empty() {
+        println!("  No vaults configured.");
+        println!();
+        println!("  Run: engram vault add <name> --path <path>");
+        println!();
+        return;
+    }
+
     let mut any_configured = false;
-    for (backend, required, display_keys) in backends {
-        if AuthStore::is_configured(backend, required) {
-            let details = display_keys
-                .iter()
-                .filter_map(|k| {
-                    AuthStore::retrieve(backend, k)
-                        .ok()
-                        .map(|v| format!("{}={}", k, v))
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!("  ✓ {} ({})", backend, details);
+    for (vault_name, vault_entry) in &config.vaults {
+        if let Some(sync) = &vault_entry.sync {
+            let details = match sync.backend.as_str() {
+                "s3" => {
+                    let endpoint = sync.endpoint.as_deref().unwrap_or("(none)");
+                    let bucket = sync.bucket.as_deref().unwrap_or("(none)");
+                    format!("endpoint={}, bucket={}", endpoint, bucket)
+                }
+                "onedrive" => {
+                    let folder = sync.folder.as_deref().unwrap_or("(none)");
+                    format!("folder={}", folder)
+                }
+                "azure" => {
+                    let account = sync.account.as_deref().unwrap_or("(none)");
+                    let container = sync.container.as_deref().unwrap_or("(none)");
+                    format!("account={}, container={}", account, container)
+                }
+                "gcs" => {
+                    let bucket = sync.bucket.as_deref().unwrap_or("(none)");
+                    format!("bucket={}", bucket)
+                }
+                other => format!("backend={}", other),
+            };
+            println!("  ✓ {} — {} ({})", vault_name, sync.backend, details);
             any_configured = true;
+        } else {
+            println!("  · {} — no sync configured", vault_name);
         }
     }
 
     if !any_configured {
-        println!("  No backends configured.");
         println!();
-        println!("  Run: engram auth add s3|onedrive|azure|gdrive");
+        println!("  Run: engram auth add s3|onedrive|azure|gdrive --vault <name>");
     }
     println!();
 }
 
-fn run_auth_remove(backend: &str) {
-    use engram_sync::auth::AuthStore;
-    use std::collections::HashMap;
+fn run_auth_remove(vault_name: &str) {
+    let mut config = EngramConfig::load();
 
-    let keys_by_backend: HashMap<&str, &[&str]> = [
-        (
-            "s3",
-            ["access_key", "secret_key", "endpoint", "bucket"].as_slice(),
-        ),
-        (
-            "onedrive",
-            ["access_token", "refresh_token", "folder"].as_slice(),
-        ),
-        ("azure", ["account", "access_key", "container"].as_slice()),
-        ("gcs", ["bucket", "key_file"].as_slice()),
-    ]
-    .into_iter()
-    .collect();
-
-    match keys_by_backend.get(backend) {
+    match config.vaults.get_mut(vault_name) {
         None => {
-            eprintln!(
-                "Unknown backend: {}. Valid options: s3, onedrive, azure, gcs",
-                backend
-            );
+            eprintln!("Vault '{}' not found in config.", vault_name);
             std::process::exit(1);
         }
-        Some(keys) => {
-            let removed = keys
-                .iter()
-                .filter(|k| AuthStore::delete(backend, k).is_ok())
-                .count();
-            if removed > 0 {
-                println!("✓ Removed {} backend credentials", backend);
-            } else {
-                println!("No credentials found for {}", backend);
+        Some(vault) => {
+            if vault.sync.is_none() {
+                println!("No sync credentials configured for vault '{}'", vault_name);
+                return;
             }
+            vault.sync = None;
         }
     }
+
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("✓ Removed sync credentials for vault '{}'", vault_name);
 }
 
 /// Show a formatted git status summary for the vault directory.
@@ -977,6 +1004,28 @@ fn default_vectors_path() -> PathBuf {
     UserDirs::new()
         .map(|u| u.home_dir().join(".engram/vectors.db"))
         .unwrap_or_else(|| PathBuf::from(".engram/vectors.db"))
+}
+
+/// Resolve the vault name for auth commands.
+///
+/// - If `vault_arg` is non-empty, return it directly.
+/// - Otherwise, load the config and return the default vault name.
+/// - Exit 1 with an error message if no default vault is configured.
+fn resolve_auth_vault_name(vault_arg: &str) -> String {
+    if !vault_arg.is_empty() {
+        return vault_arg.to_string();
+    }
+    let config = EngramConfig::load();
+    match config.default_vault() {
+        Some((name, _)) => name.to_string(),
+        None => {
+            eprintln!(
+                "No vault specified and no default vault configured. \
+                 Use --vault <name> or run: engram vault add <name> --path <path> --default"
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Resolve the vault name from an explicit argument, the config default, or the
