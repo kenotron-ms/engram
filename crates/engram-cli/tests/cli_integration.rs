@@ -400,7 +400,9 @@ fn test_sync_no_backend_configured_exits_nonzero() {
     // If it fails it must print the expected error, not a panic message.
     if !output.status.success() {
         assert!(
-            stderr.contains("No sync backend configured") || stderr.contains("No vault key found"),
+            stderr.contains("No sync backend configured")
+                || stderr.contains("No vault key found")
+                || stderr.contains("Cannot access vault key"),
             "sync failure must print a known error message, got stderr: {}",
             stderr
         );

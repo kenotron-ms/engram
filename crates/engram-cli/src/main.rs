@@ -771,51 +771,53 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     }
     // ── End sync mode gate ──────────────────────────────────────────────────
 
-    use engram_core::{crypto::KeyStore, vault::Vault};
+    use engram_core::vault::Vault;
     use engram_sync::{
-        auth::AuthStore, backend::SyncBackend, encrypt::encrypt_for_sync,
-        onedrive::OneDriveBackend, s3::S3Backend,
+        backend::SyncBackend, encrypt::encrypt_for_sync, onedrive::OneDriveBackend, s3::S3Backend,
     };
 
     let vault = Vault::new(&vault_path);
-    let key_store = KeyStore::new("engram");
 
-    let key = match key_store.retrieve() {
+    let key = match resolve_vault_key() {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("No vault key found. Run: engram init");
+        Err(e) => {
+            eprintln!("Cannot access vault key: {}", e);
+            eprintln!("Tip: set ENGRAM_VAULT_PASSPHRASE or run: engram init");
             std::process::exit(1);
         }
     };
 
-    // Determine which backend to use: explicit arg → first configured → error
-    let effective_backend = backend_name.unwrap_or_else(|| {
-        if AuthStore::is_configured("s3", &["access_key", "secret_key", "endpoint", "bucket"]) {
-            "s3"
-        } else if AuthStore::is_configured("onedrive", &["access_token", "folder"]) {
-            "onedrive"
-        } else if AuthStore::is_configured("azure", &["account", "container", "access_key"]) {
-            "azure"
-        } else if AuthStore::is_configured("gcs", &["bucket", "key_file"]) {
-            "gcs"
-        } else {
-            eprintln!("No sync backend configured. Run: engram auth add s3|onedrive|azure|gdrive");
+    // Determine which backend to use from config credentials.
+    let creds = config
+        .get_vault(&vault_name)
+        .and_then(|v| v.sync.as_ref());
+
+    let creds = match creds {
+        Some(c) => c,
+        None => {
+            eprintln!(
+                "No sync backend configured for vault '{}'. Run: engram auth add s3|onedrive|azure|gdrive --vault {}",
+                vault_name, vault_name
+            );
             std::process::exit(1);
         }
-    });
+    };
+
+    // Use explicit backend arg, or fall back to configured backend.
+    let effective_backend = backend_name.unwrap_or(creds.backend.as_str());
 
     let backend: Box<dyn SyncBackend> = match effective_backend {
         "s3" => {
-            let endpoint = AuthStore::retrieve("s3", "endpoint").unwrap();
-            let bucket = AuthStore::retrieve("s3", "bucket").unwrap();
-            let ak = AuthStore::retrieve("s3", "access_key").unwrap();
-            let sk = AuthStore::retrieve("s3", "secret_key").unwrap();
-            Box::new(S3Backend::new(&endpoint, &bucket, &ak, &sk).unwrap())
+            let endpoint = creds.endpoint.as_deref().unwrap_or_default();
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            let sk = creds.secret_key.as_deref().unwrap_or_default();
+            Box::new(S3Backend::new(endpoint, bucket, ak, sk).unwrap())
         }
         "onedrive" => {
-            let token = AuthStore::retrieve("onedrive", "access_token").unwrap();
-            let folder = AuthStore::retrieve("onedrive", "folder").unwrap();
-            Box::new(OneDriveBackend::new(&token, &folder))
+            let token = creds.access_token.as_deref().unwrap_or_default();
+            let folder = creds.folder.as_deref().unwrap_or_default();
+            Box::new(OneDriveBackend::new(token, folder))
         }
         other => {
             eprintln!(
