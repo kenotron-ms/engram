@@ -1520,6 +1520,10 @@ fn run_awareness(vault_arg: Option<&str>, _all: bool) {
         if !domains.is_empty() {
             println!("domains: {}", domains);
         }
+        let context = awareness::vault_context_files(path);
+        if !context.is_empty() {
+            println!("{}", context);
+        }
     }
     println!("</engram-context>");
 }

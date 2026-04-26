@@ -58,6 +58,44 @@ fn test_awareness_shows_domain_counts() {
         .stdout(predicate::str::contains("People (1)"));
 }
 
+/// `_context/*.md` file contents appear in the awareness output (Layer 2).
+///
+/// Vault layout:
+/// ```
+/// _context/
+///   domains.md  (content: "Work knowledge area")
+/// ```
+/// Expected: "Work knowledge area" appears in the stdout.
+#[test]
+fn test_awareness_includes_context_file_content() {
+    let tmp = TempDir::new().unwrap();
+
+    // Create _context/ with a markdown file containing known text
+    let context_dir = tmp.path().join("_context");
+    fs::create_dir_all(&context_dir).unwrap();
+    fs::write(context_dir.join("domains.md"), "Work knowledge area").unwrap();
+
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["awareness", "--vault", tmp.path().to_str().unwrap()]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("Work knowledge area"));
+}
+
+/// Missing `_context` directory must not cause errors.
+///
+/// Vault layout: no _context directory at all.
+/// Expected: exit code 0.
+#[test]
+fn test_awareness_no_context_dir_still_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    // No _context directory — just an empty vault
+
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["awareness", "--vault", tmp.path().to_str().unwrap()]);
+    cmd.assert().success();
+}
+
 /// Directories starting with `_` must not appear in domain counts.
 ///
 /// Vault layout:

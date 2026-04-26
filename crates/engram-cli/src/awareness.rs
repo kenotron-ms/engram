@@ -58,7 +58,6 @@ pub fn vault_domain_summary(vault_path: &Path) -> (usize, String) {
 /// - Joins non-empty trimmed contents with a double newline (`\n\n`).
 ///
 /// NOTE: Wired into `run_awareness` output in Layer 2.
-#[allow(dead_code)]
 pub fn vault_context_files(vault_path: &Path) -> String {
     let context_dir = vault_path.join("_context");
     if !context_dir.exists() {
