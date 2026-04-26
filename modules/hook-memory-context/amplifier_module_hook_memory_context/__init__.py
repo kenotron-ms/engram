@@ -12,13 +12,13 @@ async def mount(coordinator, config: dict):
         HookResult = None
 
     async def handle_prompt_submit(event):
-        """Call engram load --format=context and inject result as system reminder."""
+        """Call engram awareness for three-layer vault context and inject result as system reminder."""
         try:
             result = subprocess.run(
-                ["engram", "load", "--format=context"],
+                ["engram", "awareness"],
                 capture_output=True,
                 text=True,
-                timeout=config.get("timeout", 5),
+                timeout=config.get("timeout", 10),
             )
             if result.returncode == 0 and result.stdout.strip():
                 if HookResult is not None:

@@ -29,18 +29,18 @@ async def test_mount_registers_hook(coordinator):
 
 @pytest.mark.asyncio
 async def test_handler_calls_engram_load(coordinator):
-    """Handler subprocess-calls engram load --format=context."""
+    """Handler subprocess-calls engram awareness."""
     await mount(coordinator, {})
     handler = coordinator.hooks.register.call_args[0][1]
 
     with patch("subprocess.run") as mock_run:
-        mock_run.return_value = MagicMock(returncode=0, stdout="<engram-context>test</engram-context>")
+        mock_run.return_value = MagicMock(returncode=0, stdout="<engram-context>\n## Personal\nDomains: Work (89)\n</engram-context>")
         await handler(MagicMock())
         mock_run.assert_called_once_with(
-            ["engram", "load", "--format=context"],
+            ["engram", "awareness"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=10,
         )
 
 
