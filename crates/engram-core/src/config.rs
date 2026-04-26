@@ -190,6 +190,19 @@ impl EngramConfig {
 mod tests {
     use super::*;
 
+    // Serialise all tests that mutate `ENGRAM_CONFIG_PATH` in the process
+    // environment.  `std::env` is a process-global map; concurrent writes from
+    // two threads (the default under `cargo test`) are a data race.  A
+    // `OnceLock<Mutex<()>>` gives us a zero-dependency serialisation point.
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
     #[test]
     fn vault_access_default_is_read_write() {
         assert_eq!(VaultAccess::default(), VaultAccess::ReadWrite);
@@ -347,6 +360,7 @@ default = false
         use std::env;
         use tempfile::tempdir;
 
+        let _guard = env_lock();
         let dir = tempdir().expect("tempdir");
         let config_path = dir.path().join("config.toml");
 
@@ -369,6 +383,7 @@ default = false
     #[test]
     fn test_config_path_uses_env_var_override() {
         use std::env;
+        let _guard = env_lock();
         let custom = "/tmp/engram-test-config.toml";
         env::set_var("ENGRAM_CONFIG_PATH", custom);
         let path = EngramConfig::config_path();
