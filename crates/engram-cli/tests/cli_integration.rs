@@ -38,7 +38,7 @@ fn test_status_output_starts_with_separator() {
     ));
 }
 
-/// Fresh system (no vault, no store, no key) must print the "not set" states.
+/// Fresh system (no vault, no store, no key) must print the key accessibility state.
 /// This test always checks that one of the two possible key states appears.
 #[test]
 fn test_status_key_state_is_printed() {
@@ -46,10 +46,10 @@ fn test_status_key_state_is_printed() {
     cmd.arg("status");
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Key must be either "present ✓" or "not set"
+    // Key must be either "accessible ✓" or "not accessible"
     assert!(
-        stdout.contains("present \u{2713}") || stdout.contains("not set"),
-        "Key line must contain either 'present ✓' or 'not set', got: {}",
+        stdout.contains("accessible \u{2713}") || stdout.contains("not accessible"),
+        "Key line must contain 'accessible ✓' or 'not accessible', got: {}",
         stdout
     );
 }

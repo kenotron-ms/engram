@@ -771,7 +771,6 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     }
     // ── End sync mode gate ──────────────────────────────────────────────────
 
-    use engram_core::vault::Vault;
     use engram_sync::{
         backend::SyncBackend, encrypt::encrypt_for_sync, onedrive::OneDriveBackend, s3::S3Backend,
     };
