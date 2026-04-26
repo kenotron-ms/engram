@@ -12,7 +12,7 @@ use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
 use engram_core::config::{EngramConfig, SyncCredentials, SyncMode, VaultAccess, VaultEntry};
-use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
+use engram_core::{store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
 use std::path::{Path, PathBuf};
@@ -405,11 +405,11 @@ fn run_init() {
 
 fn run_mcp() {
     let store_path = default_store_path();
-    let key_store = KeyStore::new("engram");
-    let key = match key_store.retrieve() {
+    let key = match resolve_vault_key() {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("No vault key found. Run: engram init");
+        Err(e) => {
+            eprintln!("Cannot access vault key: {}", e);
+            eprintln!("Tip: run `engram init` to set up the vault");
             std::process::exit(1);
         }
     };
@@ -1331,11 +1331,11 @@ fn run_search(query: &str, vault_arg: Option<&str>, limit: usize, mode: &SearchM
 /// Load recent memories and emit them as a context block to stdout.
 fn run_load(format: &str) {
     let store_path = default_store_path();
-    let key_store = KeyStore::new("engram");
-    let key = match key_store.retrieve() {
+    let key = match resolve_vault_key() {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("No vault key found. Run: engram init");
+        Err(e) => {
+            eprintln!("Cannot access vault key: {}", e);
+            eprintln!("Tip: run `engram init` to set up the vault");
             std::process::exit(1);
         }
     };
@@ -1405,12 +1405,12 @@ fn run_observe(session_path: &Path, api_key: Option<&str>) {
         }
     };
 
-    // Retrieve the vault encryption key from the system keyring.
-    let key_store = KeyStore::new("engram");
-    let key = match key_store.retrieve() {
+    // Resolve the vault encryption key.
+    let key = match resolve_vault_key() {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("No vault key found. Run: engram init");
+        Err(e) => {
+            eprintln!("Cannot access vault key: {}", e);
+            eprintln!("Tip: run `engram init` to set up the vault");
             std::process::exit(1);
         }
     };
@@ -1475,12 +1475,12 @@ fn run_daemon() {
     use daemon::watch_sessions;
     use std::sync::mpsc;
 
-    // Retrieve vault encryption key from the system keyring.
-    let key_store = KeyStore::new("engram");
-    let key = match key_store.retrieve() {
+    // Resolve the vault encryption key.
+    let key = match resolve_vault_key() {
         Ok(k) => k,
-        Err(_) => {
-            eprintln!("No vault key found. Run: engram init");
+        Err(e) => {
+            eprintln!("Cannot access vault key: {}", e);
+            eprintln!("Tip: run `engram init` to set up the vault");
             std::process::exit(1);
         }
     };
@@ -1606,16 +1606,21 @@ fn run_doctor() {
         println!("Vault:             {} (NOT FOUND)", vault_path.display());
     }
 
-    // ── Key status ─────────────────────────────────────────────────────────────
-    let key_store = KeyStore::new("engram");
-    let key_result = key_store.retrieve();
-    match &key_result {
-        Ok(_) => println!("Key:               present \u{2713}"),
-        Err(_) => println!("Key:               not set"),
-    }
+    // ── Key method ─────────────────────────────────────────────────────────────
+    let key_method = if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
+        "ENGRAM_VAULT_KEY"
+    } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
+        "ENGRAM_VAULT_PASSPHRASE"
+    } else if config.key.salt.is_some() {
+        "config salt"
+    } else {
+        "not initialized"
+    };
+    println!("Key:               {}", key_method);
 
     // ── Memory store status ────────────────────────────────────────────────────
     let store_path = default_store_path_from_config(&config);
+    let key_result = resolve_vault_key();
     if store_path.exists() {
         match &key_result {
             Ok(key) => match MemoryStore::open(&store_path, key) {
@@ -1967,8 +1972,7 @@ fn run_status() {
 
     // ── Memory store status ───────────────────────────────────────────────────
     let store_path = default_store_path_from_config(&config);
-    let key_store = KeyStore::new("engram");
-    let key_result = key_store.retrieve();
+    let key_result = resolve_vault_key();
 
     if store_path.exists() {
         match &key_result {
@@ -2000,10 +2004,10 @@ fn run_status() {
     let search_dir = vault_storage_dir(&vault_name).join("search");
     println!("{}", search_index_status(&search_dir));
 
-    // ── Keyring status ────────────────────────────────────────────────────────
+    // ── Key status ───────────────────────────────────────────────────────
     match key_result {
-        Ok(_) => println!("Key:          present \u{2713}"),
-        Err(_) => println!("Key:          not set"),
+        Ok(_) => println!("Key:          accessible \u{2713}"),
+        Err(e) => println!("Key:          not accessible — {}", e),
     }
 }
 
