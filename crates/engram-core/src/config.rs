@@ -173,6 +173,67 @@ impl EngramConfig {
         Ok(())
     }
 
+    /// Return the path to the credentials file.
+    ///
+    /// Checks `ENGRAM_CREDENTIALS_PATH` first; falls back to `~/.engram/credentials`.
+    pub fn credentials_path() -> PathBuf {
+        if let Ok(path) = std::env::var("ENGRAM_CREDENTIALS_PATH") {
+            return PathBuf::from(path);
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".engram")
+            .join("credentials")
+    }
+
+    /// Load credentials from disk.
+    ///
+    /// Returns `Default::default()` if the file is missing or cannot be parsed.
+    pub fn load_credentials() -> CredentialsConfig {
+        let path = Self::credentials_path();
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => return CredentialsConfig::default(),
+        };
+        toml::from_str(&contents).unwrap_or_default()
+    }
+
+    /// Persist credentials to disk using an atomic tmp-file + rename.
+    ///
+    /// Creates parent directories if they do not exist. Sets 0600 permissions on Unix.
+    pub fn save_credentials(creds: &CredentialsConfig) -> Result<(), ConfigError> {
+        let path = Self::credentials_path();
+
+        // Ensure parent directory exists.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let serialised = toml::to_string(creds)?;
+
+        // Write to a sibling tmp file then rename for atomicity.
+        let tmp_path = path.with_extension("tmp");
+        std::fs::write(&tmp_path, &serialised)?;
+        std::fs::rename(&tmp_path, &path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(ConfigError::Io)?;
+        }
+
+        Ok(())
+    }
+
+    /// Look up credentials for a named vault.
+    pub fn credentials_for_vault<'a>(
+        name: &str,
+        creds: &'a CredentialsConfig,
+    ) -> Option<&'a VaultSyncCredentials> {
+        creds.vaults.get(name)
+    }
+
     /// Return the default vault: the first entry with `default = true`, or the
     /// first entry in the map (BTreeMap order = alphabetical by name).
     pub fn default_vault(&self) -> Option<(&str, &VaultEntry)> {
@@ -528,6 +589,153 @@ default = false
             toml_str.contains("sync_mode"),
             "sync_mode field should still be present:\n{toml_str}"
         );
+    }
+
+    // ── credentials_path / load_credentials / save_credentials / credentials_for_vault ────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_credentials_sets_0600() {
+        use std::env;
+        use std::os::unix::fs::MetadataExt;
+        use tempfile::tempdir;
+
+        let _guard = env_lock();
+        let dir = tempdir().expect("tempdir");
+        let creds_path = dir.path().join("credentials");
+
+        env::set_var("ENGRAM_CREDENTIALS_PATH", &creds_path);
+
+        let creds = CredentialsConfig::default();
+        EngramConfig::save_credentials(&creds).expect("save_credentials should succeed");
+
+        let metadata = std::fs::metadata(&creds_path).expect("metadata");
+        let mode = metadata.mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "credentials file should have 0600 permissions, got {:o}",
+            mode
+        );
+
+        env::remove_var("ENGRAM_CREDENTIALS_PATH");
+    }
+
+    #[test]
+    fn test_load_credentials_returns_default_when_missing() {
+        use std::env;
+
+        let _guard = env_lock();
+        // Point at a path that definitely does not exist.
+        env::set_var("ENGRAM_CREDENTIALS_PATH", "/tmp/engram-nonexistent-creds-file-12345");
+
+        let creds = EngramConfig::load_credentials();
+        assert!(
+            creds.vaults.is_empty(),
+            "load_credentials should return empty CredentialsConfig when file is missing"
+        );
+
+        env::remove_var("ENGRAM_CREDENTIALS_PATH");
+    }
+
+    #[test]
+    fn test_credentials_roundtrip_through_files() {
+        use std::env;
+        use tempfile::tempdir;
+
+        let _guard = env_lock();
+        let dir = tempdir().expect("tempdir");
+        let creds_path = dir.path().join("credentials");
+
+        env::set_var("ENGRAM_CREDENTIALS_PATH", &creds_path);
+
+        let mut creds = CredentialsConfig::default();
+        creds.vaults.insert(
+            "work".to_string(),
+            VaultSyncCredentials {
+                backend: "s3".to_string(),
+                access_key: Some("AKIA_ROUNDTRIP_KEY".to_string()),
+                secret_key: Some("super-secret".to_string()),
+                bucket: Some("my-bucket".to_string()),
+                endpoint: None,
+                container: None,
+                account: None,
+                access_token: None,
+                refresh_token: None,
+                folder: None,
+            },
+        );
+
+        EngramConfig::save_credentials(&creds).expect("save_credentials should succeed");
+        let loaded = EngramConfig::load_credentials();
+
+        let vault = loaded
+            .vaults
+            .get("work")
+            .expect("work vault should survive round-trip");
+        assert_eq!(
+            vault.access_key,
+            Some("AKIA_ROUNDTRIP_KEY".to_string()),
+            "access_key should roundtrip correctly"
+        );
+
+        env::remove_var("ENGRAM_CREDENTIALS_PATH");
+    }
+
+    #[test]
+    fn test_config_toml_never_contains_credentials() {
+        use std::env;
+        use tempfile::tempdir;
+
+        let _guard = env_lock();
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+        let creds_path = dir.path().join("credentials");
+
+        env::set_var("ENGRAM_CONFIG_PATH", &config_path);
+        env::set_var("ENGRAM_CREDENTIALS_PATH", &creds_path);
+
+        // Save a vault entry in config.
+        let mut cfg = EngramConfig::default();
+        cfg.add_vault("work".to_string(), make_entry("/vaults/work", true));
+        cfg.save().expect("save config should succeed");
+
+        // Save credentials separately.
+        let mut creds = CredentialsConfig::default();
+        creds.vaults.insert(
+            "work".to_string(),
+            VaultSyncCredentials {
+                backend: "s3".to_string(),
+                access_key: Some("AKIA_SECRET".to_string()),
+                secret_key: Some("top-secret-key".to_string()),
+                bucket: None,
+                endpoint: None,
+                container: None,
+                account: None,
+                access_token: None,
+                refresh_token: None,
+                folder: None,
+            },
+        );
+        EngramConfig::save_credentials(&creds).expect("save_credentials should succeed");
+
+        // config.toml must NOT contain the secret.
+        let config_contents = std::fs::read_to_string(&config_path).expect("read config.toml");
+        assert!(
+            !config_contents.contains("AKIA_SECRET"),
+            "config.toml must not contain credentials:
+{config_contents}"
+        );
+
+        // credentials file MUST contain it.
+        let creds_contents = std::fs::read_to_string(&creds_path).expect("read credentials");
+        assert!(
+            creds_contents.contains("AKIA_SECRET"),
+            "credentials file must contain the access_key:
+{creds_contents}"
+        );
+
+        env::remove_var("ENGRAM_CONFIG_PATH");
+        env::remove_var("ENGRAM_CREDENTIALS_PATH");
     }
 
     // ── CredentialsConfig tests ────────────────────────────────────────────────────
