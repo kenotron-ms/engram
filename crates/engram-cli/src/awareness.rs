@@ -1,8 +1,11 @@
 // awareness.rs — vault domain structure and context file helpers
 
+use engram_core::crypto::KeyStore;
+use engram_core::store::MemoryStore;
 use engram_core::vault::Vault;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Count markdown files by top-level directory, returning (total, domain_summary).
 ///
@@ -94,6 +97,77 @@ pub fn vault_context_files(vault_path: &Path) -> String {
         .collect();
 
     contents.join("\n\n")
+}
+
+/// Query the engram memory store for recently-observed facts and format them
+/// as a "Top of mind" block.
+///
+/// - Retrieves the vault encryption key via `KeyStore::new("engram").retrieve()`;
+///   returns empty if unavailable (no key in keychain).
+/// - Checks that `engram_dir/memory.db` exists; returns empty if not.
+/// - Opens the MemoryStore; returns empty on error.
+/// - Queries facts observed in the last 30 days (30-day cutoff in ms) with
+///   the given `limit`.
+/// - Groups results by entity into a `BTreeMap`.
+/// - Formats as `"Top of mind:\n- entity: value1, value2"` lines, taking up
+///   to `limit` entities.
+/// - Returns an empty string when no facts are found.
+///
+/// NOTE: Wired into `run_awareness` output in Layer 3.
+pub fn vault_recent_facts(engram_dir: &Path, limit: usize) -> String {
+    // Step 1: Retrieve keychain key — return empty on error.
+    let key = match KeyStore::new("engram").retrieve() {
+        Ok(k) => k,
+        Err(_) => return String::new(),
+    };
+
+    // Step 2: Check memory.db exists — return empty if not.
+    let db_path = engram_dir.join("memory.db");
+    if !db_path.exists() {
+        return String::new();
+    }
+
+    // Step 3: Open MemoryStore — return empty on error.
+    let store = match MemoryStore::open(&db_path, &key) {
+        Ok(s) => s,
+        Err(_) => return String::new(),
+    };
+
+    // Step 4: 30-day cutoff in milliseconds.
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let thirty_days_ms: i64 = 30 * 24 * 60 * 60 * 1_000;
+    let since_ms = now_ms - thirty_days_ms;
+
+    let memories = match store.list_recent(since_ms, limit) {
+        Ok(m) => m,
+        Err(_) => return String::new(),
+    };
+
+    if memories.is_empty() {
+        return String::new();
+    }
+
+    // Step 5: Group results by entity into BTreeMap.
+    let mut entity_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for memory in memories {
+        entity_map.entry(memory.entity).or_default().push(memory.value);
+    }
+
+    // Step 6: Format as 'Top of mind:\n- entity: value1, value2' (up to limit entities).
+    let lines: Vec<String> = entity_map
+        .iter()
+        .take(limit)
+        .map(|(entity, values)| format!("- {}: {}", entity, values.join(", ")))
+        .collect();
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    format!("Top of mind:\n{}", lines.join("\n"))
 }
 
 #[cfg(test)]

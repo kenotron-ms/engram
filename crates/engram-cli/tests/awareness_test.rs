@@ -96,6 +96,20 @@ fn test_awareness_no_context_dir_still_succeeds() {
     cmd.assert().success();
 }
 
+/// `engram awareness` must succeed silently when no `memory.db` exists in the
+/// vault's storage directory (Layer 3 regression guard).
+///
+/// This test verifies that `vault_recent_facts` gracefully returns empty
+/// rather than crashing when the memory store has not been initialised.
+#[test]
+fn test_awareness_exits_zero_when_no_store_exists() {
+    let tmp = TempDir::new().unwrap();
+    // No memory.db anywhere — vault_recent_facts should return empty silently.
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["awareness", "--vault", tmp.path().to_str().unwrap()]);
+    cmd.assert().success();
+}
+
 /// Directories starting with `_` must not appear in domain counts.
 ///
 /// Vault layout:

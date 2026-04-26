@@ -1524,6 +1524,11 @@ fn run_awareness(vault_arg: Option<&str>, _all: bool) {
         if !context.is_empty() {
             println!("{}", context);
         }
+        // Layer 3: recent facts from the per-vault memory store.
+        let recent = awareness::vault_recent_facts(&vault_storage_dir(name), 10);
+        if !recent.is_empty() {
+            println!("{}", recent);
+        }
     }
     println!("</engram-context>");
 }
