@@ -73,7 +73,7 @@ pub fn vault_context_files(vault_path: &Path) -> String {
             .filter(|e| {
                 e.path()
                     .extension()
-                    .map_or(false, |ext| ext.eq_ignore_ascii_case("md"))
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
             })
             .map(|e| e.path())
             .collect(),
@@ -153,7 +153,10 @@ pub fn vault_recent_facts(engram_dir: &Path, limit: usize) -> String {
     // Step 5: Group results by entity into BTreeMap.
     let mut entity_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for memory in memories {
-        entity_map.entry(memory.entity).or_default().push(memory.value);
+        entity_map
+            .entry(memory.entity)
+            .or_default()
+            .push(memory.value);
     }
 
     // Step 6: Format as 'Top of mind:\n- entity: value1, value2' (up to limit entities).

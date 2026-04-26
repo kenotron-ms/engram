@@ -276,7 +276,9 @@ mod tests {
         struct W {
             access: VaultAccess,
         }
-        let w = W { access: VaultAccess::ReadWrite };
+        let w = W {
+            access: VaultAccess::ReadWrite,
+        };
         let s = toml::to_string(&w).expect("serialise");
         assert!(s.contains("read-write"), "kebab-case missing:\n{s}");
     }
@@ -287,11 +289,18 @@ mod tests {
         struct W {
             mode: SyncMode,
         }
-        let approval = W { mode: SyncMode::Approval };
+        let approval = W {
+            mode: SyncMode::Approval,
+        };
         let s_approval = toml::to_string(&approval).expect("serialise");
-        assert!(s_approval.contains("approval"), "missing 'approval':\n{s_approval}");
+        assert!(
+            s_approval.contains("approval"),
+            "missing 'approval':\n{s_approval}"
+        );
 
-        let manual = W { mode: SyncMode::Manual };
+        let manual = W {
+            mode: SyncMode::Manual,
+        };
         let s_manual = toml::to_string(&manual).expect("serialise");
         assert!(s_manual.contains("manual"), "missing 'manual':\n{s_manual}");
     }
@@ -374,8 +383,14 @@ default = false
     fn test_remove_vault() {
         let mut cfg = EngramConfig::default();
         cfg.add_vault("x".to_string(), make_entry("/x", false));
-        assert!(cfg.remove_vault("x"), "remove should return true for existing vault");
-        assert!(!cfg.remove_vault("x"), "remove should return false for missing vault");
+        assert!(
+            cfg.remove_vault("x"),
+            "remove should return true for existing vault"
+        );
+        assert!(
+            !cfg.remove_vault("x"),
+            "remove should return false for missing vault"
+        );
         assert!(cfg.get_vault("x").is_none());
     }
 
@@ -387,7 +402,10 @@ default = false
         let ok = cfg.set_default("b");
         assert!(ok, "set_default should return true when vault exists");
         assert!(cfg.get_vault("b").unwrap().default, "b should be default");
-        assert!(!cfg.get_vault("a").unwrap().default, "a should no longer be default");
+        assert!(
+            !cfg.get_vault("a").unwrap().default,
+            "a should no longer be default"
+        );
         let not_ok = cfg.set_default("missing");
         assert!(!not_ok, "set_default should return false for unknown vault");
     }
@@ -410,7 +428,9 @@ default = false
 
         // Load it back
         let loaded = EngramConfig::load();
-        let entry = loaded.get_vault("main").expect("main vault missing after load");
+        let entry = loaded
+            .get_vault("main")
+            .expect("main vault missing after load");
         assert_eq!(entry.path, PathBuf::from("/vaults/main"));
         assert!(entry.default);
 
@@ -464,7 +484,8 @@ default = false
             }),
         };
         let toml_str = toml::to_string(&entry).expect("serialize VaultEntry with sync");
-        let parsed: VaultEntry = toml::from_str(&toml_str).expect("deserialize VaultEntry with sync");
+        let parsed: VaultEntry =
+            toml::from_str(&toml_str).expect("deserialize VaultEntry with sync");
         let sync = parsed.sync.expect("sync should be present after roundtrip");
         assert_eq!(sync.backend, "s3");
         assert_eq!(sync.bucket, Some("my-bucket".to_string()));
@@ -480,7 +501,10 @@ default = false
 [vaults]
 "#;
         let config: EngramConfig = toml::from_str(toml_str).expect("parse config without [key]");
-        assert!(config.key.salt.is_none(), "salt should default to None when [key] is absent");
+        assert!(
+            config.key.salt.is_none(),
+            "salt should default to None when [key] is absent"
+        );
     }
 
     #[cfg(unix)]
@@ -502,7 +526,11 @@ default = false
         let metadata = std::fs::metadata(&config_path).expect("metadata");
         // Mask off the file type bits; keep only the permission bits.
         let mode = metadata.mode() & 0o777;
-        assert_eq!(mode, 0o600, "config.toml should have 0600 permissions, got {:o}", mode);
+        assert_eq!(
+            mode, 0o600,
+            "config.toml should have 0600 permissions, got {:o}",
+            mode
+        );
 
         env::remove_var("ENGRAM_CONFIG_PATH");
     }

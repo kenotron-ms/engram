@@ -161,15 +161,15 @@ enum VaultCommands {
 
 #[derive(Subcommand)]
 enum AuthCommands {
-    /// Configure a sync backend (stores credentials in keychain)
+    /// Configure a sync backend (stores credentials in config.toml)
     Add {
         #[command(subcommand)]
         backend: BackendCommands,
     },
     /// List configured sync backends
     List,
-    /// Remove a backend's credentials from the keychain
-    Remove { backend: String },
+    /// Remove sync credentials for a vault from config.toml
+    Remove { vault: String },
 }
 
 #[derive(Subcommand)]
@@ -258,11 +258,13 @@ fn main() {
                 }
             },
             AuthCommands::List => run_auth_list(),
-            AuthCommands::Remove { backend } => run_auth_remove(&backend),
+            AuthCommands::Remove { vault } => run_auth_remove(&vault),
         },
-        Commands::Sync { backend, vault, approve } => {
-            run_sync(backend.as_deref(), vault.as_deref(), approve)
-        }
+        Commands::Sync {
+            backend,
+            vault,
+            approve,
+        } => run_sync(backend.as_deref(), vault.as_deref(), approve),
         Commands::Index { vault, force } => run_index(vault.as_deref(), force),
         Commands::Search {
             query,
@@ -290,14 +292,20 @@ fn main() {
                 sync_mode,
                 default,
                 vault_type,
-            } => run_vault_add(&name, &path, &access, &sync_mode, default, vault_type.as_deref()),
+            } => run_vault_add(
+                &name,
+                &path,
+                &access,
+                &sync_mode,
+                default,
+                vault_type.as_deref(),
+            ),
             VaultCommands::Remove { name } => run_vault_remove(&name),
             VaultCommands::SetDefault { name } => run_vault_set_default(&name),
         },
     }
 }
 
-/// Open the memory store and start the MCP stdio server.
 /// Resolve the vault encryption key using a three-tier fallback strategy.
 ///
 /// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
@@ -329,15 +337,15 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
 
     // ── Tier 2: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
     if let Ok(passphrase) = std::env::var("ENGRAM_VAULT_PASSPHRASE") {
-        let salt = load_salt()
-            .ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
+        let salt =
+            load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
         return engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
             .map_err(|e| format!("Key derivation failed: {}", e));
     }
 
     // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
-    let salt = load_salt()
-        .ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
+    let salt =
+        load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
     let passphrase = rpassword::prompt_password("Vault passphrase: ")
         .map_err(|e| format!("Failed to read passphrase: {}", e))?;
     engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
@@ -361,20 +369,18 @@ fn run_init() {
         p
     } else {
         // Interactive path: prompt + confirmation, reject empty.
-        let first = rpassword::prompt_password("Vault passphrase: ")
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to read passphrase: {}", e);
-                std::process::exit(1);
-            });
+        let first = rpassword::prompt_password("Vault passphrase: ").unwrap_or_else(|e| {
+            eprintln!("Failed to read passphrase: {}", e);
+            std::process::exit(1);
+        });
         if first.is_empty() {
             eprintln!("Passphrase must not be empty.");
             std::process::exit(1);
         }
-        let confirm = rpassword::prompt_password("Confirm passphrase: ")
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to read passphrase confirmation: {}", e);
-                std::process::exit(1);
-            });
+        let confirm = rpassword::prompt_password("Confirm passphrase: ").unwrap_or_else(|e| {
+            eprintln!("Failed to read passphrase confirmation: {}", e);
+            std::process::exit(1);
+        });
         if first != confirm {
             eprintln!("Passphrases do not match.");
             std::process::exit(1);
@@ -399,7 +405,10 @@ fn run_init() {
         std::process::exit(1);
     }
 
-    println!("✓ Vault initialised. Config written to: {}", config_path.display());
+    println!(
+        "✓ Vault initialised. Config written to: {}",
+        config_path.display()
+    );
     println!("  Tip: set ENGRAM_VAULT_PASSPHRASE to avoid interactive prompts.");
 }
 
@@ -445,7 +454,17 @@ fn run_auth_add_s3(
 
     let sk = secret_key
         .map(|s| s.to_string())
-        .unwrap_or_else(|| rpassword::prompt_password("Secret access key: ").unwrap_or_default());
+        .unwrap_or_else(|| match rpassword::prompt_password("Secret access key: ") {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => {
+                eprintln!("Secret key must not be empty.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Failed to read secret key: {}", e);
+                std::process::exit(1);
+            }
+        });
 
     let vault_name = resolve_auth_vault_name(vault_arg);
     let mut config = EngramConfig::load();
@@ -549,12 +568,25 @@ fn run_auth_add_onedrive(folder: &str) {
         std::process::exit(1);
     }
 
-    println!("\u{2713} OneDrive backend configured for vault '{}'", vault_name);
+    println!(
+        "\u{2713} OneDrive backend configured for vault '{}'",
+        vault_name
+    );
     println!("  Folder: {}", folder);
 }
 
 fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
-    let ak = rpassword::prompt_password("Access key: ").unwrap_or_default();
+    let ak = match rpassword::prompt_password("Access key: ") {
+        Ok(s) if !s.is_empty() => s,
+        Ok(_) => {
+            eprintln!("Access key must not be empty.");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Failed to read access key: {}", e);
+            std::process::exit(1);
+        }
+    };
 
     let vault_name = resolve_auth_vault_name(vault_arg);
     let mut config = EngramConfig::load();
@@ -580,7 +612,10 @@ fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
         std::process::exit(1);
     }
 
-    println!("\u{2713} Azure backend configured for vault '{}'", vault_name);
+    println!(
+        "\u{2713} Azure backend configured for vault '{}'",
+        vault_name
+    );
     println!("  Account:   {}", account);
     println!("  Container: {}", container);
 }
@@ -787,9 +822,7 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     };
 
     // Determine which backend to use from config credentials.
-    let creds = config
-        .get_vault(&vault_name)
-        .and_then(|v| v.sync.as_ref());
+    let creds = config.get_vault(&vault_name).and_then(|v| v.sync.as_ref());
 
     let creds = match creds {
         Some(c) => c,
@@ -811,7 +844,13 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
             let bucket = creds.bucket.as_deref().unwrap_or_default();
             let ak = creds.access_key.as_deref().unwrap_or_default();
             let sk = creds.secret_key.as_deref().unwrap_or_default();
-            Box::new(S3Backend::new(endpoint, bucket, ak, sk).unwrap())
+            match S3Backend::new(endpoint, bucket, ak, sk) {
+                Ok(b) => Box::new(b),
+                Err(e) => {
+                    eprintln!("Failed to initialize S3 backend: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         "onedrive" => {
             let token = creds.access_token.as_deref().unwrap_or_default();
@@ -1706,7 +1745,11 @@ fn collect_active_vaults(vault_arg: Option<&str>) -> Vec<(String, PathBuf, Strin
     if let Ok(cwd) = std::env::current_dir() {
         let project_vault = cwd.join(".lifeos/memory");
         if project_vault.exists() {
-            vaults.push(("project".to_string(), project_vault, "read-write".to_string()));
+            vaults.push((
+                "project".to_string(),
+                project_vault,
+                "read-write".to_string(),
+            ));
         }
     }
 
@@ -1781,10 +1824,7 @@ fn run_vault_list() {
         println!("No vaults configured");
         if let Some(detected) = cwd_detected {
             println!();
-            println!(
-                "  (auto-detected: {})",
-                detected.display()
-            );
+            println!("  (auto-detected: {})", detected.display());
         }
         return;
     }
@@ -2231,7 +2271,6 @@ mod tests {
         );
     }
 
-
     // ── resolve_vault_key unit tests ─────────────────────────────────────────
 
     /// Tier 1: ENGRAM_VAULT_KEY env var with 32 bytes of 42u8 must resolve successfully.
@@ -2267,11 +2306,7 @@ mod tests {
 
         // Zero salt = 16 bytes of 0x00.
         let zero_salt = B64.encode([0u8; 16]);
-        std::fs::write(
-            &config_path,
-            format!("[key]\nsalt = \"{}\"\n", zero_salt),
-        )
-        .unwrap();
+        std::fs::write(&config_path, format!("[key]\nsalt = \"{}\"\n", zero_salt)).unwrap();
 
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());

@@ -325,8 +325,7 @@ fn test_auth_remove_unknown_backend_prints_error() {
         .env("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
     // The error message must mention the vault name or "not found".
     cmd.assert().failure().stderr(
-        predicate::str::contains("unknown-backend-xyz")
-            .or(predicate::str::contains("not found")),
+        predicate::str::contains("unknown-backend-xyz").or(predicate::str::contains("not found")),
     );
 }
 

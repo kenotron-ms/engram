@@ -95,8 +95,7 @@ default = false
         let config_path = write_config(dir.path(), &toml);
 
         let mut cmd = Command::cargo_bin("engram").unwrap();
-        cmd.arg("awareness")
-            .env("ENGRAM_CONFIG_PATH", &config_path);
+        cmd.arg("awareness").env("ENGRAM_CONFIG_PATH", &config_path);
 
         cmd.assert()
             .success()
@@ -131,8 +130,7 @@ default = true
         let config_path = write_config(dir.path(), &toml);
 
         let mut cmd = Command::cargo_bin("engram").unwrap();
-        cmd.arg("awareness")
-            .env("ENGRAM_CONFIG_PATH", &config_path);
+        cmd.arg("awareness").env("ENGRAM_CONFIG_PATH", &config_path);
 
         cmd.assert()
             .success()

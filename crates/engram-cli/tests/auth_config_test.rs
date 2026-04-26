@@ -48,11 +48,7 @@ fn test_auth_add_s3_writes_to_config() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("vault");
     fs::create_dir_all(&vault_path).unwrap();
-    let config_path = write_config_with_vault(
-        dir.path(),
-        "myvault",
-        &vault_path.to_string_lossy(),
-    );
+    let config_path = write_config_with_vault(dir.path(), "myvault", &vault_path.to_string_lossy());
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args([
@@ -106,11 +102,7 @@ fn test_auth_add_s3_sets_0600_permissions() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("vault");
     fs::create_dir_all(&vault_path).unwrap();
-    let config_path = write_config_with_vault(
-        dir.path(),
-        "myvault",
-        &vault_path.to_string_lossy(),
-    );
+    let config_path = write_config_with_vault(dir.path(), "myvault", &vault_path.to_string_lossy());
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args([

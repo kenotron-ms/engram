@@ -77,9 +77,7 @@ default = true
     assert!(
         found,
         "expected one of {:?} in output but got:\nstderr: {}\nstdout: {}",
-        acceptable,
-        stderr,
-        stdout
+        acceptable, stderr, stdout
     );
 
     // Must NOT contain keyring/keychain panic messages.
