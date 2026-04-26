@@ -27,6 +27,7 @@
     serde = { version = "1", features = ["derive"] }
     notify = "6"
     shellexpand = "3"
+    base64 = { version = "0.22", features = ["std"] }
 
     [dev-dependencies]
     assert_cmd = "2"

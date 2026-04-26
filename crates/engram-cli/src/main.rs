@@ -7,6 +7,8 @@ mod load;
 mod mcp;
 mod observe;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
 use engram_core::config::{EngramConfig, SyncMode, VaultAccess, VaultEntry};
@@ -274,6 +276,52 @@ fn main() {
 }
 
 /// Open the memory store and start the MCP stdio server.
+/// Resolve the vault encryption key using a three-tier fallback strategy.
+///
+/// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
+///   into an [`engram_core::crypto::EngramKey`].
+/// Tier 2 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
+///   derived using Argon2id with the salt stored in the engram config file.
+/// Tier 3 — Interactive `rpassword` prompt + salt from config.
+///
+/// Never panics. Returns a human-friendly `Err(String)` on failure.
+fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
+    // ── Tier 1: ENGRAM_VAULT_KEY env var ─────────────────────────────────────
+    if let Ok(encoded) = std::env::var("ENGRAM_VAULT_KEY") {
+        let bytes = B64
+            .decode(&encoded)
+            .map_err(|e| format!("ENGRAM_VAULT_KEY: invalid base64: {}", e))?;
+        let key_bytes: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| "ENGRAM_VAULT_KEY must decode to exactly 32 bytes".to_string())?;
+        return Ok(engram_core::crypto::EngramKey::from_bytes(key_bytes));
+    }
+
+    // Helper: load the 16-byte Argon2 salt from the engram config file.
+    let load_salt = || -> Option<[u8; 16]> {
+        let config = EngramConfig::load();
+        let salt_b64 = config.key.salt?;
+        let bytes = B64.decode(&salt_b64).ok()?;
+        bytes.try_into().ok()
+    };
+
+    // ── Tier 2: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
+    if let Ok(passphrase) = std::env::var("ENGRAM_VAULT_PASSPHRASE") {
+        let salt = load_salt()
+            .ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
+        return engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
+            .map_err(|e| format!("Key derivation failed: {}", e));
+    }
+
+    // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
+    let salt = load_salt()
+        .ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
+    let passphrase = rpassword::prompt_password("Vault passphrase: ")
+        .map_err(|e| format!("Failed to read passphrase: {}", e))?;
+    engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
+        .map_err(|e| format!("Key derivation failed: {}", e))
+}
+
 fn run_mcp() {
     let store_path = default_store_path();
     let key_store = KeyStore::new("engram");
@@ -2064,6 +2112,113 @@ mod tests {
             path.to_str().unwrap(),
             "/tmp/test-path",
             "shellexpand_path should not alter an absolute path"
+        );
+    }
+
+
+    // ── resolve_vault_key unit tests ─────────────────────────────────────────
+
+    /// Tier 1: ENGRAM_VAULT_KEY env var with 32 bytes of 42u8 must resolve successfully.
+    #[test]
+    #[serial]
+    fn test_resolve_key_from_vault_key_env_var() {
+        let key_bytes = [42u8; 32];
+        let encoded = B64.encode(key_bytes);
+
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::set_var("ENGRAM_VAULT_KEY", &encoded);
+
+        let result = resolve_vault_key();
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+
+        assert!(
+            result.is_ok(),
+            "should resolve key from ENGRAM_VAULT_KEY env var, got: {:?}",
+            result
+        );
+    }
+
+    /// Tier 2: ENGRAM_VAULT_PASSPHRASE env var + zero salt in config must resolve
+    /// deterministically.
+    #[test]
+    #[serial]
+    fn test_resolve_key_from_passphrase_env_var() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Zero salt = 16 bytes of 0x00.
+        let zero_salt = B64.encode([0u8; 16]);
+        std::fs::write(
+            &config_path,
+            format!("[key]\nsalt = \"{}\"\n", zero_salt),
+        )
+        .unwrap();
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+        std::env::set_var("ENGRAM_VAULT_PASSPHRASE", "test-passphrase");
+
+        let result = resolve_vault_key();
+
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
+
+        assert!(
+            result.is_ok(),
+            "should resolve key from ENGRAM_VAULT_PASSPHRASE env var, got: {:?}",
+            result
+        );
+    }
+
+    /// Tier 3 fallback when no env vars are set and config has no salt: must return
+    /// an Err containing "engram init".
+    #[test]
+    #[serial]
+    fn test_resolve_key_fails_gracefully_when_not_initialized() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        // Point config to a nonexistent file so EngramConfig::load() returns Default
+        // (no salt).
+        let config_path = dir.path().join("nonexistent-config.toml");
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+
+        let result = resolve_vault_key();
+
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
+
+        assert!(result.is_err(), "should fail when not initialized");
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("engram init"),
+            "error should mention 'engram init', got: {}",
+            err_msg
+        );
+    }
+
+    /// Tier 1 with invalid base64 in ENGRAM_VAULT_KEY must return Err containing "base64".
+    #[test]
+    #[serial]
+    fn test_resolve_key_invalid_base64_vault_key_env() {
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::set_var("ENGRAM_VAULT_KEY", "not-valid-base64!!!");
+
+        let result = resolve_vault_key();
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+
+        assert!(result.is_err(), "should fail with invalid base64");
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.contains("base64"),
+            "error should mention 'base64', got: {}",
+            err_msg
         );
     }
 
