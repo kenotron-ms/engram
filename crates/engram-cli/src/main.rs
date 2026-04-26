@@ -8,6 +8,7 @@ mod observe;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
+use engram_core::config::{EngramConfig, SyncMode, VaultAccess};
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
@@ -92,6 +93,47 @@ enum Commands {
     Uninstall,
     /// Run diagnostics on the engram installation
     Doctor,
+    /// Manage vault configuration
+    Vault {
+        #[command(subcommand)]
+        command: VaultCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum VaultCommands {
+    /// List configured vaults
+    List,
+    /// Add a vault to the configuration
+    Add {
+        /// Name for the vault
+        name: String,
+        /// Filesystem path to the vault directory
+        #[arg(long)]
+        path: PathBuf,
+        /// Access mode (read or read-write)
+        #[arg(long, default_value = "read-write")]
+        access: String,
+        /// Sync mode (auto, approval, or manual)
+        #[arg(long, default_value = "approval")]
+        sync_mode: String,
+        /// Set this vault as the default
+        #[arg(long)]
+        default: bool,
+        /// Optional vault type tag
+        #[arg(long)]
+        vault_type: Option<String>,
+    },
+    /// Remove a vault from the configuration
+    Remove {
+        /// Name of the vault to remove
+        name: String,
+    },
+    /// Set the default vault
+    SetDefault {
+        /// Name of the vault to make default
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,6 +230,12 @@ fn main() {
         Commands::Install => run_install(),
         Commands::Uninstall => run_uninstall(),
         Commands::Doctor => run_doctor(),
+        Commands::Vault { command } => match command {
+            VaultCommands::List => run_vault_list(),
+            VaultCommands::Add { .. } => todo!("vault add is not yet implemented"),
+            VaultCommands::Remove { .. } => todo!("vault remove is not yet implemented"),
+            VaultCommands::SetDefault { .. } => todo!("vault set-default is not yet implemented"),
+        },
     }
 }
 
@@ -1119,6 +1167,76 @@ fn run_doctor() {
     match std::env::var("ANTHROPIC_API_KEY") {
         Ok(v) if !v.is_empty() => println!("ANTHROPIC_API_KEY: set \u{2713}"),
         _ => println!("ANTHROPIC_API_KEY: not set"),
+    }
+}
+
+/// List configured vaults from the engram config file.
+///
+/// Prints a separator line, then lists each vault with:
+/// - an exists marker (✓ if the path exists on disk, ✗ otherwise)
+/// - the vault name
+/// - a "(default)" tag if this is the default vault
+/// - the filesystem path
+/// - the access mode ("read" or "read-write")
+/// - the sync mode ("auto", "approval", or "manual")
+///
+/// If the config has no vaults, prints "No vaults configured".
+/// Also auto-detects `.lifeos/memory` in the current working directory.
+fn run_vault_list() {
+    let config = EngramConfig::load();
+
+    println!("{}", "\u{2500}".repeat(41));
+
+    // Auto-detect `.lifeos/memory` in cwd (informational only).
+    let cwd_detected = std::env::current_dir()
+        .ok()
+        .map(|d| d.join(".lifeos/memory"))
+        .filter(|p| p.exists());
+
+    if config.vaults.is_empty() {
+        println!("No vaults configured");
+        if let Some(detected) = cwd_detected {
+            println!();
+            println!(
+                "  (auto-detected: {})",
+                detected.display()
+            );
+        }
+        return;
+    }
+
+    let default_name = config.default_vault().map(|(n, _)| n.to_string());
+
+    for (name, entry) in &config.vaults {
+        let exists_marker = if entry.path.exists() {
+            '\u{2713}' // ✓
+        } else {
+            '\u{2717}' // ✗
+        };
+
+        let is_default = default_name.as_deref() == Some(name.as_str());
+        let default_tag = if is_default { " (default)" } else { "" };
+
+        let access_str = match &entry.access {
+            VaultAccess::Read => "read",
+            VaultAccess::ReadWrite => "read-write",
+        };
+
+        let sync_str = match &entry.sync_mode {
+            SyncMode::Auto => "auto",
+            SyncMode::Approval => "approval",
+            SyncMode::Manual => "manual",
+        };
+
+        println!(
+            "  {} {}{} | {} | {} | {}",
+            exists_marker,
+            name,
+            default_tag,
+            entry.path.display(),
+            access_str,
+            sync_str
+        );
     }
 }
 
