@@ -596,7 +596,6 @@ fn vault_storage_dir(vault_name: &str) -> PathBuf {
 
 /// Expand a leading `~` in `p` to the user's home directory using
 /// `shellexpand::tilde`.
-#[allow(dead_code)]
 fn shellexpand_path(p: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(p).as_ref())
 }
@@ -641,6 +640,19 @@ fn resolve_vault(name_override: Option<&str>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
 }
 
+/// Core logic for `default_vault_path`, accepting a pre-loaded config.
+///
+/// Extracted so callers that already hold a config can avoid a redundant
+/// filesystem read.
+fn default_vault_path_from_config(config: &EngramConfig) -> PathBuf {
+    if let Some((_, entry)) = config.default_vault() {
+        return entry.path.clone();
+    }
+    UserDirs::new()
+        .map(|u| u.home_dir().join(".lifeos/memory"))
+        .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
+}
+
 /// Returns the default vault path.
 ///
 /// If the engram config has a default vault registered, that vault's path is
@@ -649,13 +661,23 @@ fn resolve_vault(name_override: Option<&str>) -> PathBuf {
 /// Existing tests rely on the fallback path ending with `.lifeos/memory` when
 /// no config file is present (e.g. on a clean CI machine).
 fn default_vault_path() -> PathBuf {
-    let config = EngramConfig::load();
-    if let Some((_, entry)) = config.default_vault() {
-        return entry.path.clone();
+    default_vault_path_from_config(&EngramConfig::load())
+}
+
+/// Core logic for `default_store_path`, accepting a pre-loaded config.
+///
+/// Extracted so callers that already hold a config can avoid a redundant
+/// filesystem read.
+fn default_store_path_from_config(config: &EngramConfig) -> PathBuf {
+    if let Ok(p) = std::env::var("ENGRAM_STORE_PATH") {
+        return PathBuf::from(p);
+    }
+    if let Some((name, _)) = config.default_vault() {
+        return vault_storage_dir(name).join("memory.db");
     }
     UserDirs::new()
-        .map(|u| u.home_dir().join(".lifeos/memory"))
-        .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
+        .map(|u| u.home_dir().join(".engram/memory.db"))
+        .unwrap_or_else(|| PathBuf::from(".engram/memory.db"))
 }
 
 /// Returns the memory store path.
@@ -669,16 +691,7 @@ fn default_vault_path() -> PathBuf {
 /// Existing tests rely on the fallback path ending with `.engram/memory.db`
 /// when no config file is present (e.g. on a clean CI machine).
 fn default_store_path() -> PathBuf {
-    if let Ok(p) = std::env::var("ENGRAM_STORE_PATH") {
-        return PathBuf::from(p);
-    }
-    let config = EngramConfig::load();
-    if let Some((name, _)) = config.default_vault() {
-        return vault_storage_dir(name).join("memory.db");
-    }
-    UserDirs::new()
-        .map(|u| u.home_dir().join(".engram/memory.db"))
-        .unwrap_or_else(|| PathBuf::from(".engram/memory.db"))
+    default_store_path_from_config(&EngramConfig::load())
 }
 
 /// Returns the default search index path: `~/.engram/search`.
@@ -1187,6 +1200,9 @@ fn run_uninstall() {
 
 /// Print diagnostic information about the engram installation.
 fn run_doctor() {
+    // Load config once to avoid redundant filesystem reads across helpers.
+    let config = EngramConfig::load();
+
     let sep = "\u{2500}".repeat(41);
 
     println!("{}", sep);
@@ -1200,7 +1216,7 @@ fn run_doctor() {
     println!("Binary:            {}", binary_path);
 
     // ── Vault status ───────────────────────────────────────────────────────────
-    let vault_path = default_vault_path();
+    let vault_path = default_vault_path_from_config(&config);
     if vault_path.exists() {
         let vault = Vault::new(&vault_path);
         let count = vault.list_markdown().map(|f| f.len()).unwrap_or(0);
@@ -1222,7 +1238,7 @@ fn run_doctor() {
     }
 
     // ── Memory store status ────────────────────────────────────────────────────
-    let store_path = default_store_path();
+    let store_path = default_store_path_from_config(&config);
     if store_path.exists() {
         match &key_result {
             Ok(key) => match MemoryStore::open(&store_path, key) {
@@ -1362,10 +1378,8 @@ fn run_vault_add(
         }
     };
 
-    // Expand ~ to the home directory.
-    let path_str = path.to_string_lossy();
-    let expanded = shellexpand::tilde(path_str.as_ref());
-    let expanded_path = std::path::PathBuf::from(expanded.as_ref());
+    // Expand ~ to the home directory via the shared helper.
+    let expanded_path = shellexpand_path(path.to_string_lossy().as_ref());
 
     let mut config = EngramConfig::load();
     let entry = VaultEntry {
@@ -1417,11 +1431,14 @@ fn run_vault_set_default(name: &str) {
 
 /// Print vault state, memory store stats, and keyring status to stdout.
 fn run_status() {
+    // Load config once to avoid redundant filesystem reads across helpers.
+    let config = EngramConfig::load();
+
     // Separator line
     println!("{}", "\u{2500}".repeat(41));
 
     // ── Vault status ──────────────────────────────────────────────────────────
-    let vault_path = default_vault_path();
+    let vault_path = default_vault_path_from_config(&config);
     if vault_path.exists() {
         let vault = Vault::new(&vault_path);
         let count = vault.list_markdown().map(|files| files.len()).unwrap_or(0);
@@ -1431,7 +1448,7 @@ fn run_status() {
     }
 
     // ── Memory store status ───────────────────────────────────────────────────
-    let store_path = default_store_path();
+    let store_path = default_store_path_from_config(&config);
     let key_store = KeyStore::new("engram");
     let key_result = key_store.retrieve();
 
