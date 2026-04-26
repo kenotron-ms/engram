@@ -1,390 +1,159 @@
 # engram
 
-**Persistent, vector-backed memory for AI agents.**
+Personal memory system for AI agents. Rust-native, cross-platform, encrypted.
 
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
-![License: MIT](https://img.shields.io/badge/license-MIT-green)
-![PyPI](https://img.shields.io/badge/pypi-engram--lite-orange)
+## What it is
 
----
+Engram stores your life's knowledge as markdown files, extracts atomic facts into an encrypted database, provides hybrid full-text + semantic search, and syncs encrypted to cloud storage. Any AI harness — Amplifier, Claude Code, Cursor — can connect via the MCP server or CLI.
 
-## Quick start
+## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kenotron-ms/engram/main/install.sh | bash
+cargo install --path crates/engram-cli
 ```
 
-Memory is active the next time you run `amplifier run`. No per-project configuration needed.
-
-To remove it later: `amplifier bundle remove engram`
-
----
-
-## What is engram?
-
-engram gives AI agents persistent memory that follows you across sessions, stored locally in SQLite. Instead of starting every conversation as a blank slate, the agent remembers your preferences, past decisions, project context, and working patterns — and applies them silently, without announcing that it's doing so. Everything stays on your machine in a single database file per space, backed by [sqlite-vec](https://github.com/asg017/sqlite-vec) for vector search and FTS5 for keyword search. It works as both an [Amplifier](https://github.com/microsoft/amplifier) module and a Claude Code plugin.
-
-## How it works
-
-engram operates through a silent **RETRIEVE → RESPOND → CAPTURE** behavioral loop, injected automatically via platform hooks:
-
-```
-  User sends prompt
-        │
-        ▼
-  ┌─────────────┐    Hook silently injects recall reminder
-  │  RETRIEVE   │──▶ Agent calls memory_recall / memory_search
-  └──────┬──────┘    Relevant memories loaded into context
-         │
-         ▼
-  ┌─────────────┐    Agent responds using conversation + memories
-  │  RESPOND    │──▶ Memory operations are never mentioned to user
-  └──────┬──────┘
-         │
-         ▼
-  ┌─────────────┐    Hook silently injects capture reminder
-  │  CAPTURE    │──▶ Agent evaluates what's worth remembering
-  └─────────────┘    New knowledge stored with embeddings + graph links
+Or build from source:
+```bash
+cargo build --release
+# binary at target/release/engram
 ```
 
-Retrieval uses a **dual-route architecture** adapted from the Mnemis paper:
-
-- **System-1 (fast path)** — Vector KNN similarity + BM25 full-text search, fused via Reciprocal Rank Fusion (RRF). Handles specific queries like *"what port does the API run on?"*
-- **System-2 (deliberate path)** — Hierarchical graph traversal across a semantic taxonomy. Handles broad queries like *"summarize all the security decisions we've made."*
-
-The system auto-selects the route per query, or you can force one via the `route` parameter.
-
----
-
-## Memory tools reference
-
-All tools return structured JSON. The agent calls them via native function calling — you never need to invoke them manually.
-
-| Tool | Description |
-|------|-------------|
-| `memory_capture` | Store new knowledge with embeddings, tags, domain routing, and content type classification. Deduplicates against existing memories (cosine > 0.95 triggers merge). |
-| `memory_recall` | Dual-route retrieval. Supports `route`: `auto`, `vector`, `graph`, `hybrid`, `keyword`. Returns ranked memories with scores and related memories. |
-| `memory_search` | Quick System-1 search with filters. Simpler interface than `memory_recall` for targeted lookups. |
-| `memory_update` | Update an existing memory's content, tags, importance, or confidence score. |
-| `memory_relate` | Create typed edges between memories: `relates-to`, `supports`, `contradicts`, `supersedes`, `exemplifies`, `part-of`, `caused-by`, `decided-in`, `applies-to`. |
-| `memory_forget` | Soft-delete a memory (excluded from retrieval but retained). Pass `hard=true` to permanently remove all data including embeddings. |
-| `memory_graph_explore` | Browse the hierarchical knowledge graph. Start from a query or a specific node ID and traverse the taxonomy. |
-| `memory_stats` | Summarize the memory store: counts by space/type/domain, storage size, graph node count, most and least accessed memories. |
-
-### Tool signatures
-
-```
-memory_capture(content, type?, tags?, domain?, space?, importance?)  → memory_id
-memory_recall(query, route?, limit?, domain?, filters?)              → memories[]
-memory_search(query, domain?, limit?, filters?)                      → memories[]
-memory_update(memory_id, content?, tags?, importance?, confidence?)   → success
-memory_relate(from_id, to_id, relation_type, strength?)              → success
-memory_forget(memory_id, reason?, hard?)                             → success
-memory_graph_explore(query?, node_id?)                               → graph_nodes[]
-memory_stats(space?)                                                 → stats{}
-```
-
----
-
-## Configuration
-
-### Environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENGRAM_USER_DB` | `~/.engram/engram.db` | Path to the user-private memory database |
-| `ENGRAM_PROJECT_DB` | `.engram/engram.db` | Path to the project-shared memory database (relative to project root) |
-| `ENGRAM_EMBEDDING_PROVIDER` | `openai` | Embedding provider: `openai`, `azure`, `ollama` |
-| `ENGRAM_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
-| `ENGRAM_EMBEDDING_DIMENSIONS` | `1536` | Vector dimensions (must match model output) |
-| `OPENAI_API_KEY` | — | OpenAI API key (required for default provider) |
-| `AZURE_OPENAI_ENDPOINT` | — | Azure OpenAI endpoint URL |
-| `AZURE_OPENAI_API_KEY` | — | Azure OpenAI API key |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL for local embeddings |
-| `ENGRAM_HOOKS_ENABLED` | `true` | Enable/disable behavioral hook injection |
-| `ENGRAM_CONTEXT_BUDGET` | `500` | Max tokens for session-start context injection |
-
-### Memory content types
-
-Memories are classified into types that affect how they're stored, retrieved, and weighted:
-
-| Type | Use case |
-|------|----------|
-| `fact` | Concrete knowledge: "The API runs on port 8080" |
-| `preference` | User preferences: "I prefer composition over inheritance" |
-| `decision` | Architectural or design decisions with rationale |
-| `event` | Things that happened: "Deployed v2.3 to production" |
-| `skill` | Patterns and techniques the user has demonstrated |
-| `entity` | People, projects, services, tools |
-| `relationship` | Connections between entities |
-
----
-
-## Dual-space memory
-
-engram maintains two separate SQLite databases — one private to you, one shareable with your team:
-
-```
-~/.engram/                          <project-root>/.engram/
-├── engram.db     ← USER SPACE      ├── engram.db     ← PROJECT SPACE
-│                                    │
-│  Your preferences                  │  Architecture decisions
-│  Personal workflow habits           │  Project conventions
-│  Cross-project knowledge            │  Team patterns
-│  People & relationships             │  Why-we-chose-X rationale
-│                                    │
-│  NEVER leaves your machine          │  Safe to commit to git
-│  NEVER leaks into project space     │  Shared via version control
-```
-
-**How space is selected:**
-
-- Personal preferences, bio, constraints, people → always `user` space
-- Project decisions, architecture, context → `project` space (if available)
-- Professional knowledge → `user` space by default, unless project-specific
-- You can always override with `space="user"` or `space="project"` explicitly
-
-**Privacy gate:** Content written to project space must pass the "README test" — would this be safe in a public README? PII, credentials, and private opinions are rejected or routed to user space automatically.
-
----
-
-## Dual-route retrieval
-
-The retrieval architecture is adapted from the [Mnemis](https://arxiv.org/abs/2602.15313) dual-route model. Where Mnemis targets large-scale enterprise memory systems, engram adapts the core ideas for individual developer sessions with a local SQLite backend.
-
-### System-1: fast similarity (vector + BM25)
-
-For specific, focused queries. Embeds the query, runs KNN against stored vectors via sqlite-vec, runs BM25 full-text search via FTS5, and fuses both ranked lists using Reciprocal Rank Fusion. Fast (< 100ms for 50K memories) and precise.
-
-### System-2: hierarchical graph traversal
-
-For broad, structural queries. Memories are organized into a hierarchical semantic graph (domain taxonomy). System-2 starts from query-matched graph nodes and walks the hierarchy top-down, collecting structurally related memories that vector search alone would miss. Slower (< 300ms) but comprehensive.
-
-### Auto-routing
-
-The query analyzer examines each query and selects the best route:
-
-| Query pattern | Route selected | Example |
-|---------------|---------------|---------|
-| Specific lookup | System-1 | "What test framework do we use?" |
-| Broad domain sweep | System-1 + System-2 | "All security considerations" |
-| Exact term match | Keyword (BM25-only) | "HIPAA compliance" |
-| Exploratory | System-2 | "What do we know about auth?" |
-
-Results from both routes are deduplicated and re-ranked, with temporal recency, importance, and access frequency factored into the final score.
-
----
-
-## Privacy
-
-engram is designed to keep your data local.
-
-**What stays on your machine:**
-- All memory content (both user and project databases)
-- The knowledge graph structure
-- Tags, relations, metadata
-- BM25 full-text index
-
-**What goes over the network:**
-- Text sent to the embedding API for vector generation (OpenAI `text-embedding-3-small` by default)
-- Only the formatted embedding input is sent: `"{content_type}: {summary}\n\n{content[:512]}"`
-- No memory IDs, metadata, tags, or graph structure are transmitted
-
-**To keep everything local**, use Ollama for embeddings:
+## Quick Start
 
 ```bash
-# Run a local embedding model
-ollama pull nomic-embed-text
-
-# Configure engram to use it
-export ENGRAM_EMBEDDING_PROVIDER=ollama
-export ENGRAM_EMBEDDING_MODEL=nomic-embed-text
-export ENGRAM_EMBEDDING_DIMENSIONS=768
+engram init                          # first-time setup, creates ~/.engram/
+engram status                        # vault, index, store, sync status
+engram index                         # index vault for search
+engram search "Sofia dietary needs"  # hybrid semantic + full-text search
 ```
 
-With Ollama, zero data leaves your machine. Retrieval quality is slightly lower than OpenAI's models but fully functional.
+## CLI Reference
 
----
-
-## Project structure
-
-```
-engram/
-├── behaviors/
-│   └── engram.yaml             # Behavior bundle (hooks + tools + context)
-├── context/
-│   ├── memory-instructions.md       # Behavioral protocol injected at session start
-│   └── memory-awareness.md          # Tool awareness context
-├── bundle.md                        # Standalone root bundle (Amplifier)
-├── amplifier_module_engram_lite/
-│   ├── core/                        # Shared core library
-│   │   ├── storage.py               #   SQLite + sqlite-vec database layer
-│   │   ├── retrieval.py             #   Dual-route retrieval engine
-│   │   ├── capture.py               #   Capture pipeline (embed, classify, dedup)
-│   │   ├── graph.py                 #   Hierarchical knowledge graph
-│   │   ├── embeddings.py            #   Embedding provider abstraction
-│   │   └── models.py                #   Data models and schemas
-│   ├── amplifier_hook/              # Amplifier hook module
-│   │   ├── __init__.py              #   mount() + hook handlers
-│   │   └── config.py                #   Hook configuration
-│   ├── amplifier_tool/              # Amplifier tool module
-│   │   ├── __init__.py              #   mount() + tool registration
-│   │   └── schemas.py               #   JSON schemas for tool params
-│   ├── mcp/                         # Claude Code MCP server
-│   │   └── server.py                #   MCP tool handlers (stdio transport)
-│   └── cli.py                       # CLI entry point
-├── claude-code/                     # Claude Code plugin artifacts
-│   ├── .claude-plugin/
-│   │   └── plugin.json              #   Plugin manifest
-│   └── .claude/
-│       └── commands/                #   Slash commands
-├── tests/
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── PRD.md
-│   └── SPEC-*.md                    # Detailed specifications
-└── pyproject.toml
-```
-
----
-
-## Development
-
-### Setup
-
+### Memory & Search
 ```bash
-git clone https://github.com/kenotron-ms/engram.git
-cd engram
-uv venv && uv pip install -e ".[dev]"
+engram index [--vault PATH] [--force]    # index vault content (full-text + vector)
+engram search "<query>" [--limit N]      # hybrid search (BM25 + semantic + RRF)
+engram store                             # write a memory to the encrypted store
+engram recall                            # recall stored memories
+engram observe <session-path>            # extract facts from session transcript via LLM
+engram load [--format context]           # emit vault context for AI harness injection
 ```
 
-### Run tests
-
+### Cloud Sync
 ```bash
-pytest
-pytest --cov=amplifier_module_engram_lite
+engram auth add s3 --endpoint <url> --bucket <name>   # S3-compatible (R2, MinIO, B2, AWS)
+engram auth add onedrive                               # Microsoft OneDrive (OAuth2)
+engram auth add azure --account <name> --container ... # Azure Blob Storage
+engram auth add gdrive --bucket <name> --key-file ...  # Google Drive / GCS
+engram auth list
+engram auth remove <backend>
+engram sync [--backend <name>]           # encrypt + push all vault files to cloud
 ```
 
-### Lint and type-check
-
+### Service Management
 ```bash
-ruff check src/
-ruff format src/
-pyright src/
+engram daemon        # start background observer + MCP stdio server
+engram install       # register as system service (launchd on macOS, systemd on Linux)
+engram uninstall     # remove system service
+engram doctor        # diagnose vault, index, keychain, and service health
 ```
 
-### Architecture docs
+## Architecture
 
-The `docs/` directory contains detailed specifications for every subsystem:
+```
+engram-core      vault I/O · AES-256/XChaCha20-Poly1305 · Argon2id KDF
+                 platform keychain (iOS Keychain / Android Keystore / macOS Keychain /
+                 Windows Credential Manager / libsecret)
+                 SQLCipher encrypted memory store (atomic facts, CRUD, temporal)
 
-- `ARCHITECTURE.md` — System overview and component design
-- `PRD.md` — Product requirements and user stories
-- `SPEC-STORAGE.md` — SQLite schema, spaces, migrations
-- `SPEC-RETRIEVAL.md` — Dual-route retrieval engine
-- `SPEC-TOOLS.md` — All 8 tool APIs with schemas
-- `SPEC-HOOKS.md` — Platform hook integration
-- `SPEC-EMBEDDINGS.md` — Embedding providers and configuration
-- `SPEC-AMPLIFIER-BUNDLE.md` — Amplifier bundle structure
-- `SPEC-CLAUDE-CODE-PLUGIN.md` — Claude Code plugin structure
-- `SPEC-PROTOCOLS.md` — Behavioral protocols
-- `SPEC-TAGGING.md` — Tag and keyword systems
+engram-search    tantivy BM25 full-text search
+                 fastembed AllMiniLML6V2 (384-dim embeddings, runs locally)
+                 sqlite-vec KNN vector search
+                 Hybrid RRF ranking · incremental content-hash reindexing
 
----
+engram-sync      SyncBackend trait (S3 / Azure Blob / GCS / OneDrive)
+                 object_store crate (S3-compatible covers Cloudflare R2, MinIO, AWS, Backblaze B2)
+                 OneDrive via Microsoft Graph REST API
+                 Client-side XChaCha20-Poly1305 encryption before every upload
+                 OAuth2 + platform keychain for credential storage
+```
 
-## License
+## Encryption Model
 
-MIT. See [LICENSE](LICENSE) for details.
+**Local vault** — plaintext files on your OS-encrypted drive (FileVault, BitLocker, iOS, Android encryption). Trust the OS.
 
----
+**Cloud sync** — always client-side encrypted before upload. The remote storage backend never sees plaintext. Key is derived via Argon2id from your password and stored in the platform keychain.
 
-## Citation
+**Memory store** (`~/.engram/memory.db`) — always SQLCipher encrypted (AES-256), even without cloud sync.
 
-If you use engram in your work, please cite the Mnemis paper that inspired the dual-route retrieval architecture:
+## Storage Layout
 
-```bibtex
-@article{tang2026mnemis,
-  title={Mnemis: Dual-Route Retrieval on Hierarchical Graphs for Long-Term LLM Memory},
-  author={Tang, Zihao and Yu, Xin and Xiao, Ziyu and Wen, Zengxuan and Li, Zelin and Zhou, Jiaxi and Wang, Hualei and Wang, Haohua and Huang, Haizhen and Deng, Weiwei and Sun, Feng and Zhang, Qi},
-  journal={arXiv preprint arXiv:2602.15313},
-  year={2026}
+```
+~/.lifeos/memory/          vault — markdown files, git-tracked, human-readable
+  .engram/
+    index/                 tantivy full-text index (rebuilt locally, not synced)
+    vectors.db             sqlite-vec vector index (rebuilt locally, not synced)
+    memory.db              SQLCipher encrypted memory store (rebuilt locally)
+
+Cloud backend              only encrypted ciphertext (never plaintext)
+```
+
+## Mobile (UniFFI)
+
+`engram-core` generates native bindings for iOS (Swift), Android (Kotlin), and Python via [UniFFI](https://mozilla.github.io/uniffi-rs/).
+
+See [`crates/engram-core/bindings/`](crates/engram-core/bindings/) for generated files and usage examples.
+
+```swift
+// iOS Swift
+let salt = generateSaltFfi()
+let keyBytes = try deriveKey(password: Array("password".utf8), salt: salt)
+let store = try MemoryStoreHandle(dbPath: "~/.engram/memory.db", keyBytes: keyBytes)
+try store.insertMemory(entity: "Sofia", attribute: "dietary", value: "vegetarian", source: nil)
+```
+
+```kotlin
+// Android Kotlin
+val keyBytes = deriveKey("password".toByteArray().toList(), generateSaltFfi())
+val store = MemoryStoreHandle(dbPath = "memory.db", keyBytes = keyBytes)
+store.insertMemory("Sofia", "dietary", "vegetarian", null)
+```
+
+## AI Harness Integration
+
+### MCP Server
+Run `engram daemon` — it starts an MCP stdio server exposing `memory_search`, `memory_load`, and `memory_status` tools. Compatible with Claude Code, Cursor, Windsurf, and any MCP client.
+
+Configure in your harness:
+```json
+{
+  "mcpServers": {
+    "engram": {
+      "command": "engram",
+      "args": ["daemon"]
+    }
+  }
 }
 ```
 
-**Paper:** [arXiv:2602.15313](https://arxiv.org/abs/2602.15313) |
-**DOI:** [10.48550/arXiv.2602.15313](https://doi.org/10.48550/arXiv.2602.15313)
+### Amplifier
+See [`modules/`](modules/) for Amplifier hook and tool modules:
+- `hook-memory-context` — injects vault context at session start
+- `hook-memory-observe` — processes session transcripts at session end
+- `tool-memory` — exposes search, load, and status as agent tools
 
----
+## Development
 
-## Acknowledgements
+```bash
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
 
-**Dual-route retrieval architecture** adapted from
-[Mnemis: Dual-Route Retrieval on Hierarchical Graphs for Long-Term LLM Memory](https://arxiv.org/abs/2602.15313)
-by Zihao Tang, Xin Yu, Ziyu Xiao, Zengxuan Wen, Zelin Li, Jiaxi Zhou, Hualei Wang,
-Haohua Wang, Haizhen Huang, Weiwei Deng, Feng Sun, and Qi Zhang
-(arXiv:2602.15313, 2026).
+# Run engram from source
+cargo run --bin engram -- status
+```
 
-**Behavioral protocol patterns** (hook injection, silent RETRIEVE-RESPOND-CAPTURE loop,
-dual-space memory) inspired by [Engram](https://github.com/kenotron-ms/engram) —
-a file-based memory system for AI agents.
+## License
 
-engram is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
-only borrows design ideas.
-
-    ---
-
-    ## Mobile Integration (UniFFI)
-
-    `engram-core` exposes its full API to iOS, Android, and Python via
-    [UniFFI](https://mozilla.github.io/uniffi-rs/). The same Rust code that runs
-    on your desktop compiles natively to all five platforms.
-
-    ### Supported targets
-
-    | Platform | Target triple | Output |
-    |---|---|---|
-    | macOS | `aarch64-apple-darwin` | `libengram_core.dylib` |
-    | iOS | `aarch64-apple-ios` | `libengram_core.a` (staticlib) |
-    | Android (arm64) | `aarch64-linux-android` | `libengram_core.so` |
-    | Windows | `x86_64-pc-windows-msvc` | `engram_core.dll` |
-    | Linux | `x86_64-unknown-linux-gnu` | `libengram_core.so` |
-
-    ### Generate language bindings
-
-    ```bash
-    # Swift (iOS/macOS)
-    cargo run -p engram-core --bin uniffi-bindgen -- generate \
-      crates/engram-core/src/engram_core.udl \
-      --language swift \
-      --out-dir crates/engram-core/bindings/swift/
-
-    # Kotlin (Android)
-    cargo run -p engram-core --bin uniffi-bindgen -- generate \
-      crates/engram-core/src/engram_core.udl \
-      --language kotlin \
-      --out-dir crates/engram-core/bindings/kotlin/
-
-    # Python
-    cargo run -p engram-core --bin uniffi-bindgen -- generate \
-      crates/engram-core/src/engram_core.udl \
-      --language python \
-      --out-dir crates/engram-core/bindings/python/
-    ```
-
-    Pre-generated bindings are checked in at `crates/engram-core/bindings/`.
-    See [`SWIFT_USAGE.md`](crates/engram-core/bindings/SWIFT_USAGE.md) and
-    [`KOTLIN_USAGE.md`](crates/engram-core/bindings/KOTLIN_USAGE.md) for usage examples.
-
-    ### Exposed API surface
-
-    | Symbol | Description |
-    |---|---|
-    | `derive_key(password, salt)` | Argon2id KDF → 32-byte key |
-    | `generate_salt()` | Cryptographically random 16-byte salt |
-    | `encrypt_bytes(key, plaintext)` | XChaCha20-Poly1305 encrypt |
-    | `decrypt_bytes(key, ciphertext)` | XChaCha20-Poly1305 decrypt |
-    | `vault_read(path, rel)` | Read a file from the markdown vault |
-    | `vault_write(path, rel, content)` | Write a file to the vault (creates dirs) |
-    | `vault_list_markdown(path)` | List all `.md` files recursively |
-    | `MemoryStoreHandle` | Thread-safe handle to the SQLCipher memory store |
-    | `MemoryRecord` | Dictionary: id, entity, attribute, value, source, timestamps |
-    
+MIT

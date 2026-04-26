@@ -1,20 +1,12 @@
-# Python
+# Rust
+/target/
+
+# Python (modules/ still uses Python)
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-*.egg
 *.egg-info/
 dist/
-build/
-eggs/
-parts/
-var/
-sdist/
-develop-eggs/
-.installed.cfg
-lib/
-lib64/
 
 # Virtual environments
 .venv/
@@ -22,37 +14,19 @@ venv/
 ENV/
 env/
 
-# Distribution / packaging
-.Python
-pip-wheel-metadata/
-share/python-wheels/
-*.manifest
-*.spec
-
 # Testing
 .pytest_cache/
 .coverage
 .coverage.*
 htmlcov/
-.tox/
-.nox/
 coverage.xml
-*.cover
-nosetests.xml
-coverage/
 
 # Type checking
 .mypy_cache/
-.dmypy.json
-dmypy.json
 .pyright/
 
 # Ruff
 .ruff_cache/
-
-# Jupyter
-.ipynb_checkpoints
-*.ipynb
 
 # IDEs
 .vscode/
@@ -75,7 +49,6 @@ Icon
 .env.*
 !.env.example
 
-# engram-lite specific
 # Don't commit user memory databases
 *.db
 *.db-shm
@@ -87,9 +60,6 @@ Icon
 # NOTE: ~/.engram/ (user-global memory dir) cannot be gitignored from here;
 # add it to your global ~/.gitignore_global if desired.
 
-# Hatch
-.hatch/
-
-# fastembed local model cache (populated by tests/runtime; ~90 MB binary weights)
+# fastembed local model cache (~90 MB binary weights)
 .fastembed_cache/
 */.fastembed_cache/

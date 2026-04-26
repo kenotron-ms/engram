@@ -1,9 +1,0 @@
-{
-  "name": "engram-lite",
-  "version": "0.1.0",
-  "description": "Persistent vector memory for Claude Code — dual-route recall + MEMORY.md hot surface",
-  "author": {
-    "name": "kenotron-ms",
-    "url": "https://github.com/kenotron-ms/engram-lite"
-  }
-}
