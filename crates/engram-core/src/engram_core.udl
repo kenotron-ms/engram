@@ -1,4 +1,58 @@
-// UniFFI UDL - engram-core FFI interface definition
-// This is a placeholder; FFI bindings will be expanded in subsequent tasks.
+// UniFFI UDL — engram-core FFI interface definition
 
-namespace engram_core {};
+namespace engram_core {
+    [Throws=EngramError]
+    sequence<u8> derive_key(string password, sequence<u8> salt);
+
+    sequence<u8> generate_salt();
+
+    [Throws=EngramError]
+    sequence<u8> encrypt_bytes(sequence<u8> key_bytes, sequence<u8> plaintext);
+
+    [Throws=EngramError]
+    sequence<u8> decrypt_bytes(sequence<u8> key_bytes, sequence<u8> ciphertext);
+
+    [Throws=EngramError]
+    string vault_read(string vault_path, string relative_path);
+
+    [Throws=EngramError]
+    void vault_write(string vault_path, string relative_path, string content);
+
+    [Throws=EngramError]
+    sequence<string> vault_list_markdown(string vault_path);
+};
+
+[Error]
+enum EngramError {
+    "Crypto",
+    "Vault",
+    "Store",
+    "InvalidInput",
+};
+
+interface MemoryStoreHandle {
+    [Throws=EngramError]
+    constructor(string db_path, sequence<u8> key_bytes);
+
+    [Throws=EngramError]
+    void insert_memory(string entity, string attribute, string value, string? source);
+
+    [Throws=EngramError]
+    MemoryRecord? get_memory(string id);
+
+    [Throws=EngramError]
+    sequence<MemoryRecord> find_by_entity(string entity);
+
+    [Throws=EngramError]
+    u64 record_count();
+};
+
+dictionary MemoryRecord {
+    string id;
+    string entity;
+    string attribute;
+    string value;
+    string? source;
+    i64 created_at;
+    i64 updated_at;
+};
