@@ -489,19 +489,92 @@ fn run_auth_remove(backend: &str) {
     }
 }
 
+/// Show a formatted git status summary for the vault directory.
+///
+/// Runs `git -C <vault_path> status --short` and prints each changed file
+/// with a human-readable label (modified, new file, deleted, renamed, changed).
+/// If the directory is not a git repository or git is unavailable, prints a
+/// graceful message instead.
+fn show_vault_diff(vault_path: &Path) {
+    let output = std::process::Command::new("git")
+        .args(["-C", &vault_path.to_string_lossy(), "status", "--short"])
+        .output();
+
+    match output {
+        Err(_) => {
+            println!("  (git not available — cannot show pending changes)");
+        }
+        Ok(out) if !out.status.success() => {
+            println!("  (not a git repository — cannot show pending changes)");
+        }
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if stdout.trim().is_empty() {
+                println!("  (no pending changes)");
+            } else {
+                for line in stdout.lines() {
+                    let label = if line.starts_with('M') || line.starts_with(" M") {
+                        "modified"
+                    } else if line.starts_with('A') || line.starts_with("??") {
+                        "new file"
+                    } else if line.starts_with('D') || line.starts_with(" D") {
+                        "deleted"
+                    } else if line.starts_with('R') {
+                        "renamed"
+                    } else {
+                        "changed"
+                    };
+                    let file = line.trim_start_matches(|c: char| {
+                        c.is_ascii_uppercase() || c == '?' || c == ' '
+                    });
+                    println!("  {} {}", label, file);
+                }
+            }
+        }
+    }
+}
+
 fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) {
     // Check write access before any backend logic.
     let vault_name = resolve_vault_name(vault_arg);
     check_write_access(&vault_name);
 
-    let _ = approve;
+    // Resolve the vault path (used by the mode gate and the sync backend).
+    let vault_path = resolve_vault(vault_arg);
+
+    // ── Sync mode gate ──────────────────────────────────────────────────────
+    // Look up the vault's sync_mode from config (if registered).
+    let config = EngramConfig::load();
+    let sync_mode = config
+        .get_vault(&vault_name)
+        .map(|e| e.sync_mode.clone())
+        .unwrap_or(SyncMode::Auto);
+
+    match (&sync_mode, approve) {
+        // Manual mode: print informational message and return early.
+        (SyncMode::Manual, _) => {
+            println!("This vault uses manual sync mode. Sync is managed externally.");
+            return;
+        }
+        // Approval mode without --approve: show diff and hint, then return.
+        (SyncMode::Approval, false) => {
+            println!("Pending changes (approval required):");
+            show_vault_diff(&vault_path);
+            println!();
+            println!("To push: run `engram sync --approve` to push these changes.");
+            return;
+        }
+        // Auto mode, or approval + --approve: fall through to sync backend.
+        _ => {}
+    }
+    // ── End sync mode gate ──────────────────────────────────────────────────
+
     use engram_core::{crypto::KeyStore, vault::Vault};
     use engram_sync::{
         auth::AuthStore, backend::SyncBackend, encrypt::encrypt_for_sync,
         onedrive::OneDriveBackend, s3::S3Backend,
     };
 
-    let vault_path = default_vault_path();
     let vault = Vault::new(&vault_path);
     let key_store = KeyStore::new("engram");
 
@@ -680,6 +753,7 @@ fn default_vault_path_from_config(config: &EngramConfig) -> PathBuf {
 ///
 /// Existing tests rely on the fallback path ending with `.lifeos/memory` when
 /// no config file is present (e.g. on a clean CI machine).
+#[allow(dead_code)]
 fn default_vault_path() -> PathBuf {
     default_vault_path_from_config(&EngramConfig::load())
 }
