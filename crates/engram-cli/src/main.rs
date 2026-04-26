@@ -8,7 +8,7 @@ mod observe;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
-use engram_core::config::{EngramConfig, SyncMode, VaultAccess};
+use engram_core::config::{EngramConfig, SyncMode, VaultAccess, VaultEntry};
 use engram_core::{crypto::KeyStore, store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
@@ -232,9 +232,16 @@ fn main() {
         Commands::Doctor => run_doctor(),
         Commands::Vault { command } => match command {
             VaultCommands::List => run_vault_list(),
-            VaultCommands::Add { .. } => todo!("vault add is not yet implemented"),
-            VaultCommands::Remove { .. } => todo!("vault remove is not yet implemented"),
-            VaultCommands::SetDefault { .. } => todo!("vault set-default is not yet implemented"),
+            VaultCommands::Add {
+                name,
+                path,
+                access,
+                sync_mode,
+                default,
+                vault_type,
+            } => run_vault_add(&name, &path, &access, &sync_mode, default, vault_type.as_deref()),
+            VaultCommands::Remove { name } => run_vault_remove(&name),
+            VaultCommands::SetDefault { name } => run_vault_set_default(&name),
         },
     }
 }
@@ -1238,6 +1245,85 @@ fn run_vault_list() {
             sync_str
         );
     }
+}
+
+/// Add a vault entry to the engram config file.
+///
+/// - Parses `access` ("read" or "read-write") into [`VaultAccess`].
+/// - Parses `sync_mode` ("auto", "approval", or "manual") into [`SyncMode`].
+/// - Expands leading `~` in `path` via `shellexpand::tilde`.
+/// - Loads the current config, calls `add_vault`, then saves atomically.
+/// - If `default` is `true`, all other vaults have their default flag cleared.
+fn run_vault_add(
+    name: &str,
+    path: &std::path::Path,
+    access: &str,
+    sync_mode: &str,
+    default: bool,
+    vault_type: Option<&str>,
+) {
+    let access_mode = match access {
+        "read" => VaultAccess::Read,
+        _ => VaultAccess::ReadWrite,
+    };
+
+    let sync = match sync_mode {
+        "auto" => SyncMode::Auto,
+        "manual" => SyncMode::Manual,
+        _ => SyncMode::Approval,
+    };
+
+    // Expand ~ to the home directory.
+    let path_str = path.to_string_lossy();
+    let expanded = shellexpand::tilde(path_str.as_ref());
+    let expanded_path = std::path::PathBuf::from(expanded.as_ref());
+
+    let mut config = EngramConfig::load();
+    let entry = VaultEntry {
+        path: expanded_path,
+        access: access_mode,
+        sync_mode: sync,
+        default,
+        vault_type: vault_type.map(|s| s.to_string()),
+    };
+    config.add_vault(name.to_string(), entry);
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+    println!("\u{2713} Vault '{}' added", name);
+}
+
+/// Remove a vault entry from the engram config file.
+///
+/// Exits with code 1 if no vault with the given name is registered.
+fn run_vault_remove(name: &str) {
+    let mut config = EngramConfig::load();
+    if !config.remove_vault(name) {
+        eprintln!("Vault '{}' not found", name);
+        std::process::exit(1);
+    }
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+    println!("\u{2713} Vault '{}' removed", name);
+}
+
+/// Set the default vault in the engram config file.
+///
+/// Exits with code 1 if no vault with the given name is registered.
+fn run_vault_set_default(name: &str) {
+    let mut config = EngramConfig::load();
+    if !config.set_default(name) {
+        eprintln!("Vault '{}' not found", name);
+        std::process::exit(1);
+    }
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+    println!("\u{2713} Default vault set to '{}'", name);
 }
 
 /// Print vault state, memory store stats, and keyring status to stdout.
