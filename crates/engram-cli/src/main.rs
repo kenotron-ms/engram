@@ -713,6 +713,7 @@ fn default_store_path() -> PathBuf {
 }
 
 /// Returns the default search index path: `~/.engram/search`.
+#[allow(dead_code)]
 fn default_search_dir() -> PathBuf {
     UserDirs::new()
         .map(|u| u.home_dir().join(".engram/search"))
