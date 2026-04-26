@@ -584,8 +584,75 @@ fn run_sync(backend_name: Option<&str>) {
     }
 }
 
-/// Returns the default vault path: `~/.lifeos/memory`.
+/// Returns the per-vault storage directory: `~/.engram/<vault_name>/`.
+///
+/// This directory is used to store vault-specific files such as the memory
+/// database (`memory.db`).
+fn vault_storage_dir(vault_name: &str) -> PathBuf {
+    UserDirs::new()
+        .map(|u| u.home_dir().join(".engram").join(vault_name))
+        .unwrap_or_else(|| PathBuf::from(format!(".engram/{}", vault_name)))
+}
+
+/// Expand a leading `~` in `p` to the user's home directory using
+/// `shellexpand::tilde`.
+#[allow(dead_code)]
+fn shellexpand_path(p: &str) -> PathBuf {
+    PathBuf::from(shellexpand::tilde(p).as_ref())
+}
+
+/// Resolve the active vault path using the priority chain:
+///
+/// 1. Explicit `name_override` → look up in config; exit 1 if not found.
+/// 2. Auto-detected project vault (`.lifeos/memory` in the current working directory).
+/// 3. Config default vault (first entry marked `default = true`, or first alphabetically).
+/// 4. Hardcoded fallback: `~/.lifeos/memory`.
+#[allow(dead_code)]
+fn resolve_vault(name_override: Option<&str>) -> PathBuf {
+    let config = EngramConfig::load();
+
+    // 1. Explicit name override — must be in config.
+    if let Some(name) = name_override {
+        match config.get_vault(name) {
+            Some(entry) => return entry.path.clone(),
+            None => {
+                eprintln!("Vault '{}' not found in config", name);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // 2. Auto-detect `.lifeos/memory` in the current working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        let project_vault = cwd.join(".lifeos/memory");
+        if project_vault.exists() {
+            return project_vault;
+        }
+    }
+
+    // 3. Config default vault.
+    if let Some((_, entry)) = config.default_vault() {
+        return entry.path.clone();
+    }
+
+    // 4. Hardcoded fallback.
+    UserDirs::new()
+        .map(|u| u.home_dir().join(".lifeos/memory"))
+        .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
+}
+
+/// Returns the default vault path.
+///
+/// If the engram config has a default vault registered, that vault's path is
+/// used.  Otherwise, falls back to `~/.lifeos/memory`.
+///
+/// Existing tests rely on the fallback path ending with `.lifeos/memory` when
+/// no config file is present (e.g. on a clean CI machine).
 fn default_vault_path() -> PathBuf {
+    let config = EngramConfig::load();
+    if let Some((_, entry)) = config.default_vault() {
+        return entry.path.clone();
+    }
     UserDirs::new()
         .map(|u| u.home_dir().join(".lifeos/memory"))
         .unwrap_or_else(|| PathBuf::from(".lifeos/memory"))
@@ -593,13 +660,21 @@ fn default_vault_path() -> PathBuf {
 
 /// Returns the memory store path.
 ///
-/// If the `ENGRAM_STORE_PATH` environment variable is set, its value is used
-/// directly, allowing tests and operators to point to a custom database without
-/// modifying the system keychain or home directory.  Otherwise the default path
-/// `~/.engram/memory.db` is returned.
+/// Priority:
+/// 1. `ENGRAM_STORE_PATH` environment variable — used directly.
+/// 2. Config default vault's per-vault storage directory:
+///    `~/.engram/<vault_name>/memory.db`.
+/// 3. Legacy fallback: `~/.engram/memory.db`.
+///
+/// Existing tests rely on the fallback path ending with `.engram/memory.db`
+/// when no config file is present (e.g. on a clean CI machine).
 fn default_store_path() -> PathBuf {
     if let Ok(p) = std::env::var("ENGRAM_STORE_PATH") {
         return PathBuf::from(p);
+    }
+    let config = EngramConfig::load();
+    if let Some((name, _)) = config.default_vault() {
+        return vault_storage_dir(name).join("memory.db");
     }
     UserDirs::new()
         .map(|u| u.home_dir().join(".engram/memory.db"))
@@ -1555,6 +1630,96 @@ mod tests {
             !status.contains(dir.path().to_str().unwrap()),
             "not-built message must not include the search dir path, got: {}",
             status
+        );
+    }
+
+    // ── vault_storage_dir unit tests ──────────────────────────────────────────────
+
+    /// `vault_storage_dir("personal")` must produce a path ending with `.engram/personal`.
+    #[test]
+    fn test_vault_storage_dir_ends_with_vault_name() {
+        let path = vault_storage_dir("personal");
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".engram/personal"),
+            "vault_storage_dir(\"personal\") should end with .engram/personal, got: {}",
+            path_str
+        );
+    }
+
+    /// `vault_storage_dir` with a different name must end with that name.
+    #[test]
+    fn test_vault_storage_dir_uses_provided_name() {
+        let path = vault_storage_dir("work");
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".engram/work"),
+            "vault_storage_dir(\"work\") should end with .engram/work, got: {}",
+            path_str
+        );
+    }
+
+    // ── shellexpand_path unit tests ───────────────────────────────────────────────
+
+    /// `shellexpand_path("~/foo")` must expand the tilde to an absolute path.
+    #[test]
+    fn test_shellexpand_path_expands_tilde() {
+        let path = shellexpand_path("~/foo");
+        // After expansion the path must be absolute (no leading ~).
+        let path_str = path.to_string_lossy();
+        assert!(
+            !path_str.starts_with('~'),
+            "shellexpand_path should expand ~ to an absolute path, got: {}",
+            path_str
+        );
+        assert!(
+            path_str.ends_with("/foo"),
+            "shellexpand_path should preserve the suffix /foo, got: {}",
+            path_str
+        );
+    }
+
+    /// `shellexpand_path` with an already-absolute path must return it unchanged.
+    #[test]
+    fn test_shellexpand_path_leaves_absolute_path_unchanged() {
+        let path = shellexpand_path("/tmp/test-path");
+        assert_eq!(
+            path.to_str().unwrap(),
+            "/tmp/test-path",
+            "shellexpand_path should not alter an absolute path"
+        );
+    }
+
+    // ── resolve_vault unit tests ──────────────────────────────────────────────────
+
+    /// When no name override is given and no project vault exists in the cwd,
+    /// `resolve_vault(None)` must return either the config default or the fallback
+    /// `~/.lifeos/memory`.
+    #[test]
+    #[serial]
+    fn test_resolve_vault_none_returns_fallback_when_no_config() {
+        // Use a temp dir as the current directory so no .lifeos/memory is present.
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        // Save cwd, change to temp dir, restore after test.
+        let original = std::env::current_dir().ok();
+        std::env::set_current_dir(dir.path()).unwrap();
+        // Point ENGRAM_CONFIG_PATH to a nonexistent file so config is empty.
+        std::env::set_var("ENGRAM_CONFIG_PATH", dir.path().join("no-config.toml"));
+
+        let path = resolve_vault(None);
+
+        // Restore state.
+        if let Some(orig) = original {
+            let _ = std::env::set_current_dir(orig);
+        }
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
+
+        let path_str = path.to_string_lossy();
+        assert!(
+            path_str.ends_with(".lifeos/memory"),
+            "resolve_vault(None) with no config should fall back to .lifeos/memory, got: {}",
+            path_str
         );
     }
 }

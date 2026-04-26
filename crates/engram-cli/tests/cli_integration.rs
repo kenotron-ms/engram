@@ -544,6 +544,19 @@ fn test_mcp_help_exits_successfully() {
     cmd.assert().success();
 }
 
+// ─── config-module integration tests (Task 5) ──────────────────────────────
+
+/// `engram status` must still exit zero after the config module is integrated into
+/// `default_vault_path` and `default_store_path`.
+/// This is a regression guard: verifies the config-aware path resolution does not
+/// break the status command when no config file is present.
+#[test]
+fn test_status_still_exits_zero_with_config_module() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.arg("status");
+    cmd.assert().success();
+}
+
 // ─── engram install / uninstall / doctor tests (Task 10) ─────────────────────
 
 /// `engram install --help` must exit 0 (install command is registered).

@@ -173,3 +173,15 @@ fn test_vault_list_remove_nonexistent_exits_nonzero() {
         .env("ENGRAM_CONFIG_PATH", &config_path);
     cmd.assert().failure();
 }
+
+/// `engram vault --help` must show the three vault subcommands: list, add, and remove.
+#[test]
+fn test_vault_list_shows_help_for_vault_command() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["vault", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("add"))
+        .stdout(predicate::str::contains("remove"));
+}
