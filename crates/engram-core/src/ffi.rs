@@ -8,11 +8,12 @@
 // the UniFfiTag scaffolding type is generated in Task 6.  They will be restored
 // when the full UniFFI scaffolding is wired into lib.rs.
 
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 use crate::crypto::{decrypt, encrypt, generate_salt as crypto_generate_salt, EngramKey};
-use crate::store::MemoryStore;
+use crate::store::{Memory, MemoryStore};
 use crate::vault::Vault;
 
 /// Errors exposed across the FFI boundary.
@@ -39,6 +40,19 @@ fn bytes_to_key(bytes: Vec<u8>) -> Result<EngramKey, EngramError> {
         EngramError::InvalidInput("key must be exactly 32 bytes".to_string())
     })?;
     Ok(EngramKey::from_bytes(arr))
+}
+
+/// Convert a store `Memory` into an FFI-safe `MemoryRecord`.
+fn memory_to_record(m: Memory) -> MemoryRecord {
+    MemoryRecord {
+        id: m.id,
+        entity: m.entity,
+        attribute: m.attribute,
+        value: m.value,
+        source: m.source,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+    }
 }
 
 // ── crypto wrappers ───────────────────────────────────────────────────────────
@@ -125,30 +139,60 @@ pub struct MemoryStoreHandle {
 }
 
 impl MemoryStoreHandle {
-    pub fn new(_db_path: String, _key_bytes: Vec<u8>) -> Result<Self, EngramError> {
-        todo!("MemoryStoreHandle::new stub")
+    /// Open (or create) an encrypted memory store at `db_path` using `key_bytes`.
+    ///
+    /// Returns `InvalidInput` if `key_bytes` is not exactly 32 bytes.
+    /// Returns `Store` if the database cannot be opened.
+    pub fn new(db_path: String, key_bytes: Vec<u8>) -> Result<Arc<Self>, EngramError> {
+        let key = bytes_to_key(key_bytes)?;
+        let store = MemoryStore::open(Path::new(&db_path), &key)
+            .map_err(|e| EngramError::Store(e.to_string()))?;
+        Ok(Arc::new(Self { inner: Mutex::new(store) }))
     }
 
+    /// Create and insert a new memory record for the given entity/attribute/value triple.
     pub fn insert_memory(
         &self,
-        _entity: String,
-        _attribute: String,
-        _value: String,
-        _source: Option<String>,
+        entity: String,
+        attribute: String,
+        value: String,
+        source: Option<String>,
     ) -> Result<(), EngramError> {
-        todo!("insert_memory stub")
+        let memory = Memory::new(&entity, &attribute, &value, source.as_deref());
+        self.inner
+            .lock()
+            .unwrap()
+            .insert(&memory)
+            .map_err(|e| EngramError::Store(e.to_string()))
     }
 
-    pub fn get_memory(&self, _id: String) -> Result<Option<MemoryRecord>, EngramError> {
-        todo!("get_memory stub")
+    /// Retrieve a memory record by id, or `None` if not found.
+    pub fn get_memory(&self, id: String) -> Result<Option<MemoryRecord>, EngramError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map_err(|e| EngramError::Store(e.to_string()))
+            .map(|opt| opt.map(memory_to_record))
     }
 
-    pub fn find_by_entity(&self, _entity: String) -> Result<Vec<MemoryRecord>, EngramError> {
-        todo!("find_by_entity stub")
+    /// Return all memory records associated with `entity`.
+    pub fn find_by_entity(&self, entity: String) -> Result<Vec<MemoryRecord>, EngramError> {
+        self.inner
+            .lock()
+            .unwrap()
+            .find_by_entity(&entity)
+            .map_err(|e| EngramError::Store(e.to_string()))
+            .map(|vec| vec.into_iter().map(memory_to_record).collect())
     }
 
+    /// Return the total number of records in the store.
     pub fn record_count(&self) -> Result<u64, EngramError> {
-        todo!("record_count stub")
+        self.inner
+            .lock()
+            .unwrap()
+            .record_count()
+            .map_err(|e| EngramError::Store(e.to_string()))
     }
 }
 
@@ -248,5 +292,107 @@ mod tests {
             "wrong key length must return InvalidInput, got: {:?}",
             result
         );
+    }
+
+    // ── store tests ───────────────────────────────────────────────────────────
+
+    fn make_test_store() -> (std::sync::Arc<MemoryStoreHandle>, TempDir) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test_ffi.db");
+        let key_bytes = vec![0u8; 32];
+        let handle = MemoryStoreHandle::new(db_path.to_str().unwrap().to_string(), key_bytes)
+            .expect("failed to create test store");
+        (handle, dir)
+    }
+
+    #[test]
+    fn test_store_insert_get_find_count() {
+        let (handle, _dir) = make_test_store();
+        handle
+            .insert_memory(
+                "Sofia".to_string(),
+                "dietary".to_string(),
+                "vegetarian".to_string(),
+                Some("2026-04-14 transcript".to_string()),
+            )
+            .expect("insert failed");
+
+        assert_eq!(handle.record_count().expect("count failed"), 1);
+
+        let records = handle
+            .find_by_entity("Sofia".to_string())
+            .expect("find_by_entity failed");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].entity, "Sofia");
+        assert_eq!(records[0].attribute, "dietary");
+        assert_eq!(records[0].value, "vegetarian");
+        assert_eq!(records[0].source, Some("2026-04-14 transcript".to_string()));
+
+        let record = handle
+            .get_memory(records[0].id.clone())
+            .expect("get_memory failed");
+        assert!(record.is_some(), "expected get_memory to return a record");
+        let record = record.unwrap();
+        assert_eq!(record.entity, "Sofia");
+        assert_eq!(record.value, "vegetarian");
+    }
+
+    #[test]
+    fn test_store_get_missing_returns_none() {
+        let (handle, _dir) = make_test_store();
+        let result = handle
+            .get_memory("nonexistent-uuid".to_string())
+            .expect("get_memory should not error for missing id");
+        assert!(result.is_none(), "expected None for missing id");
+    }
+
+    #[test]
+    fn test_store_wrong_key_length_returns_invalid_input() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test_ffi.db");
+        let result = MemoryStoreHandle::new(
+            db_path.to_str().unwrap().to_string(),
+            vec![0u8; 10], // wrong: 10 bytes instead of 32
+        );
+        assert!(
+            matches!(result, Err(EngramError::InvalidInput(_))),
+            "expected Err(EngramError::InvalidInput(_)) for 10-byte key, but got a different result"
+        );
+    }
+
+    #[test]
+    fn test_store_concurrent_inserts_do_not_panic() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let (handle, _dir) = make_test_store();
+
+        let h1 = Arc::clone(&handle);
+        let h2 = Arc::clone(&handle);
+
+        let t1 = thread::spawn(move || {
+            h1.insert_memory(
+                "ThreadA".to_string(),
+                "test".to_string(),
+                "valueA".to_string(),
+                None,
+            )
+            .expect("ThreadA insert failed");
+        });
+
+        let t2 = thread::spawn(move || {
+            h2.insert_memory(
+                "ThreadB".to_string(),
+                "test".to_string(),
+                "valueB".to_string(),
+                None,
+            )
+            .expect("ThreadB insert failed");
+        });
+
+        t1.join().expect("thread A panicked");
+        t2.join().expect("thread B panicked");
+
+        assert_eq!(handle.record_count().expect("count failed"), 2);
     }
 }
