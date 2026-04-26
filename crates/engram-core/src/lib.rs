@@ -7,6 +7,7 @@
 // Must appear before module declarations that use uniffi derives.
 uniffi::include_scaffolding!("engram_core");
 
+pub mod config;
 pub mod crypto;
 pub mod ffi;
 pub mod store;
