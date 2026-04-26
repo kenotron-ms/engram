@@ -70,6 +70,9 @@ pub struct KeyConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VaultSyncCredentials {
     /// Backend identifier (e.g. "s3", "azure", "gdrive").
+    ///
+    /// Note: `Default::default()` yields an empty string — backend must be set
+    /// before the credentials are used.
     pub backend: String,
     pub endpoint: Option<String>,
     pub bucket: Option<String>,
@@ -346,7 +349,7 @@ default = false
         assert_eq!(entry.sync_mode, SyncMode::Approval);
     }
 
-    // ── Task-2 tests ──────────────────────────────────────────────────────────
+    // ── EngramConfig / VaultEntry CRUD ───────────────────────────────────────
 
     fn make_entry(path: &str, is_default: bool) -> VaultEntry {
         VaultEntry {
@@ -450,7 +453,7 @@ default = false
         env::remove_var("ENGRAM_CONFIG_PATH");
     }
 
-    // ── Task-1 tests ───────────────────────────────────────────────────────────
+    // ── KeyConfig / EngramConfig serialization ──────────────────────────────────
 
     #[test]
     fn test_key_config_roundtrip() {
@@ -463,8 +466,6 @@ default = false
         let parsed: KeyConfig = toml::from_str(&toml_str).expect("deserialize KeyConfig");
         assert_eq!(parsed.salt, Some("c2FsdHNhbHR2YWx1ZQ==".to_string()));
     }
-
-
 
     #[test]
     fn test_config_missing_key_section_uses_default() {
@@ -529,7 +530,7 @@ default = false
         );
     }
 
-    // ── Task-1 new tests ────────────────────────────────────────────────────────
+    // ── CredentialsConfig tests ────────────────────────────────────────────────────
 
     #[test]
     fn test_credentials_config_default_is_empty() {
