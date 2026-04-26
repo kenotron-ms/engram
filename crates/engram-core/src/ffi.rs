@@ -13,6 +13,7 @@ use thiserror::Error;
 
 use crate::crypto::{decrypt, encrypt, generate_salt as crypto_generate_salt, EngramKey};
 use crate::store::MemoryStore;
+use crate::vault::Vault;
 
 /// Errors exposed across the FFI boundary.
 #[derive(Debug, Error)]
@@ -79,22 +80,25 @@ pub fn decrypt_bytes(key_bytes: Vec<u8>, ciphertext: Vec<u8>) -> Result<Vec<u8>,
     decrypt(&key, &ciphertext).map_err(|e| EngramError::Crypto(e.to_string()))
 }
 
-// ── vault stubs ───────────────────────────────────────────────────────────────
+// ── vault wrappers ───────────────────────────────────────────────────────────────
 
-pub fn vault_read(_vault_path: String, _relative_path: String) -> Result<String, EngramError> {
-    todo!("vault_read stub")
+pub fn vault_read(vault_path: String, relative_path: String) -> Result<String, EngramError> {
+    let vault = Vault::new(&vault_path);
+    vault.read(&relative_path).map_err(|e| EngramError::Vault(e.to_string()))
 }
 
 pub fn vault_write(
-    _vault_path: String,
-    _relative_path: String,
-    _content: String,
+    vault_path: String,
+    relative_path: String,
+    content: String,
 ) -> Result<(), EngramError> {
-    todo!("vault_write stub")
+    let vault = Vault::new(&vault_path);
+    vault.write(&relative_path, &content).map_err(|e| EngramError::Vault(e.to_string()))
 }
 
-pub fn vault_list_markdown(_vault_path: String) -> Result<Vec<String>, EngramError> {
-    todo!("vault_list_markdown stub")
+pub fn vault_list_markdown(vault_path: String) -> Result<Vec<String>, EngramError> {
+    let vault = Vault::new(&vault_path);
+    vault.list_markdown().map_err(|e| EngramError::Vault(e.to_string()))
 }
 
 // ── store types & handle ─────────────────────────────────────────────────────
@@ -153,6 +157,47 @@ impl MemoryStoreHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_vault_write_then_read() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().to_str().unwrap().to_string();
+        vault_write(vault_path.clone(), "note.md".to_string(), "hello vault".to_string())
+            .expect("vault_write failed");
+        let content =
+            vault_read(vault_path, "note.md".to_string()).expect("vault_read failed");
+        assert_eq!(content, "hello vault");
+    }
+
+    #[test]
+    fn test_vault_list_markdown_returns_only_md_files() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().to_str().unwrap().to_string();
+        vault_write(vault_path.clone(), "a.md".to_string(), "content a".to_string()).unwrap();
+        vault_write(vault_path.clone(), "b.md".to_string(), "content b".to_string()).unwrap();
+        vault_write(vault_path.clone(), "image.png".to_string(), "binary".to_string()).unwrap();
+        let files = vault_list_markdown(vault_path).expect("vault_list_markdown failed");
+        assert!(files.contains(&"a.md".to_string()), "a.md missing from list: {:?}", files);
+        assert!(files.contains(&"b.md".to_string()), "b.md missing from list: {:?}", files);
+        assert!(
+            !files.contains(&"image.png".to_string()),
+            "image.png should not appear in markdown list: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn test_vault_read_missing_file_returns_vault_error() {
+        let dir = TempDir::new().unwrap();
+        let vault_path = dir.path().to_str().unwrap().to_string();
+        let result = vault_read(vault_path, "nonexistent.md".to_string());
+        assert!(
+            matches!(result, Err(EngramError::Vault(_))),
+            "expected Err(EngramError::Vault(_)), got: {:?}",
+            result
+        );
+    }
 
     #[test]
     fn test_ffi_generate_salt_is_16_bytes() {
