@@ -155,6 +155,13 @@ impl EngramConfig {
         std::fs::write(&tmp_path, &serialised)?;
         std::fs::rename(&tmp_path, &path)?;
 
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .map_err(ConfigError::Io)?;
+        }
+
         Ok(())
     }
 
@@ -474,6 +481,30 @@ default = false
 "#;
         let config: EngramConfig = toml::from_str(toml_str).expect("parse config without [key]");
         assert!(config.key.salt.is_none(), "salt should default to None when [key] is absent");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_save_sets_0600_permissions() {
+        use std::env;
+        use std::os::unix::fs::MetadataExt;
+        use tempfile::tempdir;
+
+        let _guard = env_lock();
+        let dir = tempdir().expect("tempdir");
+        let config_path = dir.path().join("config.toml");
+
+        env::set_var("ENGRAM_CONFIG_PATH", &config_path);
+
+        let cfg = EngramConfig::default();
+        cfg.save().expect("save should succeed");
+
+        let metadata = std::fs::metadata(&config_path).expect("metadata");
+        // Mask off the file type bits; keep only the permission bits.
+        let mode = metadata.mode() & 0o777;
+        assert_eq!(mode, 0o600, "config.toml should have 0600 permissions, got {:o}", mode);
+
+        env::remove_var("ENGRAM_CONFIG_PATH");
     }
 
     #[test]
