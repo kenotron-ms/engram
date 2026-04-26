@@ -659,8 +659,8 @@ fn test_status_shows_vaults_label_when_configured() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        stdout.contains("primary") || stdout.contains("Vault"),
-        "status output must contain vault name 'primary' or 'Vault' when a vault is configured, got: {}",
+        stdout.contains("primary"),
+        "status output must contain vault name 'primary' when a vault is configured via ENGRAM_CONFIG_PATH, got: {}",
         stdout
     );
 }
