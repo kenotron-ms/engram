@@ -727,6 +727,24 @@ fn default_vectors_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".engram/vectors.db"))
 }
 
+/// Resolve the vault name from an explicit argument, the config default, or the
+/// literal fallback `"default"`.
+///
+/// Priority chain (highest → lowest):
+/// 1. `vault_arg` — explicitly provided `--vault <name>` flag value.
+/// 2. `EngramConfig::default_vault()` — the vault marked as default in the
+///    user's config file.
+/// 3. Literal `"default"` — hardcoded last-resort fallback.
+fn resolve_vault_name(vault_arg: Option<&str>) -> String {
+    vault_arg.map(|s| s.to_string()).unwrap_or_else(|| {
+        let config = EngramConfig::load();
+        config
+            .default_vault()
+            .map(|(n, _)| n.to_string())
+            .unwrap_or_else(|| "default".to_string())
+    })
+}
+
 /// Recursively compute the total size in bytes of all files under `path`.
 /// Returns 0 if `path` does not exist or cannot be read.
 fn dir_size_bytes(path: &Path) -> u64 {
@@ -754,13 +772,7 @@ fn run_index(vault_arg: Option<&str>, force: bool) {
     use engram_search::vector::VectorIndex;
 
     // Determine the vault name for per-vault storage directories.
-    let vault_name = vault_arg.map(|s| s.to_string()).unwrap_or_else(|| {
-        let config = EngramConfig::load();
-        config
-            .default_vault()
-            .map(|(n, _)| n.to_string())
-            .unwrap_or_else(|| "default".to_string())
-    });
+    let vault_name = resolve_vault_name(vault_arg);
 
     // Resolve the actual filesystem path where markdown files live.
     let vault_path = resolve_vault(vault_arg);
@@ -892,13 +904,7 @@ fn run_search(query: &str, vault_arg: Option<&str>, limit: usize, mode: &SearchM
     use engram_search::vector::VectorIndex;
 
     // Determine the vault name for per-vault storage directories.
-    let vault_name = vault_arg.map(|s| s.to_string()).unwrap_or_else(|| {
-        let config = EngramConfig::load();
-        config
-            .default_vault()
-            .map(|(n, _)| n.to_string())
-            .unwrap_or_else(|| "default".to_string())
-    });
+    let vault_name = resolve_vault_name(vault_arg);
 
     let search_dir = vault_storage_dir(&vault_name).join("search");
 
@@ -1514,7 +1520,10 @@ fn run_status() {
     }
 
     // ── Search index status ───────────────────────────────────────────────────
-    let search_dir = default_search_dir();
+    // Use the same vault-aware path that `run_index` writes to, so that
+    // `engram status` accurately reflects what `engram index` built.
+    let vault_name = resolve_vault_name(None);
+    let search_dir = vault_storage_dir(&vault_name).join("search");
     println!("{}", search_index_status(&search_dir));
 
     // ── Keyring status ────────────────────────────────────────────────────────
