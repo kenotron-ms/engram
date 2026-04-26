@@ -1264,13 +1264,27 @@ fn run_vault_add(
 ) {
     let access_mode = match access {
         "read" => VaultAccess::Read,
-        _ => VaultAccess::ReadWrite,
+        "read-write" => VaultAccess::ReadWrite,
+        other => {
+            eprintln!(
+                "Invalid access mode: '{}'. Valid values: read, read-write",
+                other
+            );
+            std::process::exit(1);
+        }
     };
 
     let sync = match sync_mode {
         "auto" => SyncMode::Auto,
+        "approval" => SyncMode::Approval,
         "manual" => SyncMode::Manual,
-        _ => SyncMode::Approval,
+        other => {
+            eprintln!(
+                "Invalid sync mode: '{}'. Valid values: auto, approval, manual",
+                other
+            );
+            std::process::exit(1);
+        }
     };
 
     // Expand ~ to the home directory.
