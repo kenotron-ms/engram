@@ -318,10 +318,29 @@ fn run_auth_add_s3(
         .map(|s| s.to_string())
         .unwrap_or_else(|| rpassword::prompt_password("Secret access key: ").unwrap_or_default());
 
-    AuthStore::store("s3", "access_key", &ak).unwrap();
-    AuthStore::store("s3", "secret_key", &sk).unwrap();
-    AuthStore::store("s3", "endpoint", endpoint).unwrap();
-    AuthStore::store("s3", "bucket", bucket).unwrap();
+    let mut keychain_ok = true;
+    if let Err(e) = AuthStore::store("s3", "access_key", &ak) {
+        eprintln!("Warning: could not store credential in system keychain: {}", e);
+        keychain_ok = false;
+    }
+    if let Err(e) = AuthStore::store("s3", "secret_key", &sk) {
+        eprintln!("Warning: could not store credential in system keychain: {}", e);
+        keychain_ok = false;
+    }
+    if let Err(e) = AuthStore::store("s3", "endpoint", endpoint) {
+        eprintln!("Warning: could not store credential in system keychain: {}", e);
+        keychain_ok = false;
+    }
+    if let Err(e) = AuthStore::store("s3", "bucket", bucket) {
+        eprintln!("Warning: could not store credential in system keychain: {}", e);
+        keychain_ok = false;
+    }
+    if !keychain_ok {
+        eprintln!("Tip: set these environment variables as a fallback:");
+        eprintln!(
+            "  ENGRAM_S3_ACCESS_KEY, ENGRAM_S3_SECRET_KEY, ENGRAM_S3_ENDPOINT, ENGRAM_S3_BUCKET"
+        );
+    }
 
     println!("\u{2713} S3 backend configured");
     println!("  Endpoint: {}", endpoint);
@@ -375,9 +394,31 @@ fn run_auth_add_onedrive(folder: &str) {
         .expect("No access_token in response");
     let refresh_token = json["refresh_token"].as_str().unwrap_or("");
 
-    AuthStore::store("onedrive", "access_token", access_token).unwrap();
-    AuthStore::store("onedrive", "refresh_token", refresh_token).unwrap();
-    AuthStore::store("onedrive", "folder", folder).unwrap();
+    let mut keychain_ok = true;
+    if let Err(e) = AuthStore::store("onedrive", "access_token", access_token) {
+        eprintln!(
+            "Warning: could not store OneDrive token in system keychain: {}",
+            e
+        );
+        keychain_ok = false;
+    }
+    if let Err(e) = AuthStore::store("onedrive", "refresh_token", refresh_token) {
+        eprintln!(
+            "Warning: could not store OneDrive refresh token in system keychain: {}",
+            e
+        );
+        keychain_ok = false;
+    }
+    if let Err(e) = AuthStore::store("onedrive", "folder", folder) {
+        eprintln!(
+            "Warning: could not store OneDrive folder in system keychain: {}",
+            e
+        );
+        keychain_ok = false;
+    }
+    if !keychain_ok {
+        eprintln!("Tip: set ENGRAM_ONEDRIVE_TOKEN as a fallback environment variable.");
+    }
 
     println!("\u{2713} OneDrive backend configured");
     println!("  Folder: {}", folder);
@@ -391,9 +432,24 @@ fn run_auth_add_azure(account: &str, container: &str) {
     io::stdout().flush().unwrap();
     let ak = rpassword::prompt_password("Access key: ").unwrap_or_default();
 
-    AuthStore::store("azure", "account", account).unwrap();
-    AuthStore::store("azure", "container", container).unwrap();
-    AuthStore::store("azure", "access_key", &ak).unwrap();
+    if let Err(e) = AuthStore::store("azure", "account", account) {
+        eprintln!(
+            "Warning: could not store Azure account in system keychain: {}",
+            e
+        );
+    }
+    if let Err(e) = AuthStore::store("azure", "container", container) {
+        eprintln!(
+            "Warning: could not store Azure container in system keychain: {}",
+            e
+        );
+    }
+    if let Err(e) = AuthStore::store("azure", "access_key", &ak) {
+        eprintln!(
+            "Warning: could not store Azure access key in system keychain: {}",
+            e
+        );
+    }
 
     println!("\u{2713} Azure backend configured");
     println!("  Account:   {}", account);
@@ -1653,6 +1709,7 @@ fn run_vault_add(
         sync_mode: sync,
         default,
         vault_type: vault_type.map(|s| s.to_string()),
+        sync: None,
     };
     config.add_vault(name.to_string(), entry);
     if let Err(e) = config.save() {

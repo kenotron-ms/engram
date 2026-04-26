@@ -59,6 +59,29 @@ fn default_sync_mode() -> SyncMode {
 // Structs
 // ──────────────────────────────────────────────────────────────────────────────
 
+/// Key-derivation configuration (base64-encoded salt, etc.).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KeyConfig {
+    /// Optional base64-encoded salt used for key derivation.
+    pub salt: Option<String>,
+}
+
+/// Remote-sync credentials for a vault.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncCredentials {
+    /// Backend identifier (e.g. "s3", "azure", "gdrive").
+    pub backend: String,
+    pub endpoint: Option<String>,
+    pub bucket: Option<String>,
+    pub access_key: Option<String>,
+    pub secret_key: Option<String>,
+    pub container: Option<String>,
+    pub account: Option<String>,
+    pub access_token: Option<String>,
+    pub refresh_token: Option<String>,
+    pub folder: Option<String>,
+}
+
 /// A single registered vault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultEntry {
@@ -71,6 +94,8 @@ pub struct VaultEntry {
     pub default: bool,
     #[serde(rename = "type")]
     pub vault_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sync: Option<SyncCredentials>,
 }
 
 /// Top-level Engram configuration file.
@@ -78,6 +103,8 @@ pub struct VaultEntry {
 pub struct EngramConfig {
     #[serde(default)]
     pub vaults: BTreeMap<String, VaultEntry>,
+    #[serde(default)]
+    pub key: KeyConfig,
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -227,6 +254,7 @@ mod tests {
             sync_mode: SyncMode::Approval,
             default: true,
             vault_type: Some("git".to_string()),
+            sync: None,
         };
         let s = toml::to_string(&entry).expect("serialise VaultEntry");
         // The serde rename("type") must produce a "type" key, not "vault_type".
@@ -272,6 +300,7 @@ mod tests {
                 sync_mode: SyncMode::Approval,
                 default: true,
                 vault_type: Some("git".to_string()),
+                sync: None,
             },
         );
 
@@ -307,6 +336,7 @@ default = false
             sync_mode: SyncMode::Approval,
             default: is_default,
             vault_type: None,
+            sync: None,
         }
     }
 
@@ -389,5 +419,79 @@ default = false
         let path = EngramConfig::config_path();
         assert_eq!(path, PathBuf::from(custom));
         env::remove_var("ENGRAM_CONFIG_PATH");
+    }
+
+    // ── Task-1 tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_key_config_roundtrip() {
+        // base64 for "saltsaltvalue"
+        let kc = KeyConfig {
+            salt: Some("c2FsdHNhbHR2YWx1ZQ==".to_string()),
+        };
+        let toml_str = toml::to_string(&kc).expect("serialize KeyConfig");
+        assert!(toml_str.contains("salt"), "salt key missing:\n{toml_str}");
+        let parsed: KeyConfig = toml::from_str(&toml_str).expect("deserialize KeyConfig");
+        assert_eq!(parsed.salt, Some("c2FsdHNhbHR2YWx1ZQ==".to_string()));
+    }
+
+    #[test]
+    fn test_sync_credentials_roundtrip() {
+        let entry = VaultEntry {
+            path: PathBuf::from("/vaults/synced"),
+            access: VaultAccess::ReadWrite,
+            sync_mode: SyncMode::Auto,
+            default: false,
+            vault_type: None,
+            sync: Some(SyncCredentials {
+                backend: "s3".to_string(),
+                bucket: Some("my-bucket".to_string()),
+                access_key: Some("AKID".to_string()),
+                secret_key: Some("secret".to_string()),
+                endpoint: None,
+                container: None,
+                account: None,
+                access_token: None,
+                refresh_token: None,
+                folder: None,
+            }),
+        };
+        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry with sync");
+        let parsed: VaultEntry = toml::from_str(&toml_str).expect("deserialize VaultEntry with sync");
+        let sync = parsed.sync.expect("sync should be present after roundtrip");
+        assert_eq!(sync.backend, "s3");
+        assert_eq!(sync.bucket, Some("my-bucket".to_string()));
+        assert_eq!(sync.access_key, Some("AKID".to_string()));
+        assert_eq!(sync.secret_key, Some("secret".to_string()));
+        assert!(sync.endpoint.is_none());
+    }
+
+    #[test]
+    fn test_config_missing_key_section_uses_default() {
+        // A config with no [key] section should parse with key.salt == None.
+        let toml_str = r#"
+[vaults]
+"#;
+        let config: EngramConfig = toml::from_str(toml_str).expect("parse config without [key]");
+        assert!(config.key.salt.is_none(), "salt should default to None when [key] is absent");
+    }
+
+    #[test]
+    fn test_sync_field_absent_when_none() {
+        let entry = VaultEntry {
+            path: PathBuf::from("/vaults/no-sync"),
+            access: VaultAccess::ReadWrite,
+            sync_mode: SyncMode::Approval,
+            default: false,
+            vault_type: None,
+            sync: None,
+        };
+        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry with sync = None");
+        // "sync_mode" is a different field; we check that the [sync] table (sync credentials)
+        // is absent when the field is None.
+        assert!(
+            !toml_str.contains("[sync]"),
+            "sync table section should be absent when None:\n{toml_str}"
+        );
     }
 }
