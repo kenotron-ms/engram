@@ -329,3 +329,62 @@ a file-based memory system for AI agents.
 
 engram is a **clean-room implementation**. It does not copy code from Engram or Mnemis —
 only borrows design ideas.
+
+    ---
+
+    ## Mobile Integration (UniFFI)
+
+    `engram-core` exposes its full API to iOS, Android, and Python via
+    [UniFFI](https://mozilla.github.io/uniffi-rs/). The same Rust code that runs
+    on your desktop compiles natively to all five platforms.
+
+    ### Supported targets
+
+    | Platform | Target triple | Output |
+    |---|---|---|
+    | macOS | `aarch64-apple-darwin` | `libengram_core.dylib` |
+    | iOS | `aarch64-apple-ios` | `libengram_core.a` (staticlib) |
+    | Android (arm64) | `aarch64-linux-android` | `libengram_core.so` |
+    | Windows | `x86_64-pc-windows-msvc` | `engram_core.dll` |
+    | Linux | `x86_64-unknown-linux-gnu` | `libengram_core.so` |
+
+    ### Generate language bindings
+
+    ```bash
+    # Swift (iOS/macOS)
+    cargo run -p engram-core --bin uniffi-bindgen -- generate \
+      crates/engram-core/src/engram_core.udl \
+      --language swift \
+      --out-dir crates/engram-core/bindings/swift/
+
+    # Kotlin (Android)
+    cargo run -p engram-core --bin uniffi-bindgen -- generate \
+      crates/engram-core/src/engram_core.udl \
+      --language kotlin \
+      --out-dir crates/engram-core/bindings/kotlin/
+
+    # Python
+    cargo run -p engram-core --bin uniffi-bindgen -- generate \
+      crates/engram-core/src/engram_core.udl \
+      --language python \
+      --out-dir crates/engram-core/bindings/python/
+    ```
+
+    Pre-generated bindings are checked in at `crates/engram-core/bindings/`.
+    See [`SWIFT_USAGE.md`](crates/engram-core/bindings/SWIFT_USAGE.md) and
+    [`KOTLIN_USAGE.md`](crates/engram-core/bindings/KOTLIN_USAGE.md) for usage examples.
+
+    ### Exposed API surface
+
+    | Symbol | Description |
+    |---|---|
+    | `derive_key(password, salt)` | Argon2id KDF → 32-byte key |
+    | `generate_salt()` | Cryptographically random 16-byte salt |
+    | `encrypt_bytes(key, plaintext)` | XChaCha20-Poly1305 encrypt |
+    | `decrypt_bytes(key, ciphertext)` | XChaCha20-Poly1305 decrypt |
+    | `vault_read(path, rel)` | Read a file from the markdown vault |
+    | `vault_write(path, rel, content)` | Write a file to the vault (creates dirs) |
+    | `vault_list_markdown(path)` | List all `.md` files recursively |
+    | `MemoryStoreHandle` | Thread-safe handle to the SQLCipher memory store |
+    | `MemoryRecord` | Dictionary: id, entity, attribute, value, source, timestamps |
+    

@@ -2,22 +2,17 @@
 //
 // This module exposes crypto, vault, and store operations across the FFI
 // boundary using types that are compatible with UniFFI's code generation.
-//
-// NOTE: uniffi derive macros (#[derive(uniffi::Error)], #[derive(uniffi::Record)],
-// #[derive(uniffi::Object)], #[uniffi::export]) are temporarily removed because
-// the UniFfiTag scaffolding type is generated in Task 6.  They will be restored
-// when the full UniFFI scaffolding is wired into lib.rs.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use thiserror::Error;
+use std::sync::Mutex;
 
 use crate::crypto::{decrypt, encrypt, generate_salt as crypto_generate_salt, EngramKey};
 use crate::store::{Memory, MemoryStore};
 use crate::vault::Vault;
 
 /// Errors exposed across the FFI boundary.
-#[derive(Debug, Error)]
+/// uniffi::Error semantics are provided by the UDL definition ([Error] enum EngramError).
+#[derive(Debug, thiserror::Error)]
 pub enum EngramError {
     #[error("crypto error: {0}")]
     Crypto(String),
@@ -36,9 +31,9 @@ pub enum EngramError {
 
 /// Convert a byte vector to an EngramKey, returning InvalidInput if wrong length.
 fn bytes_to_key(bytes: Vec<u8>) -> Result<EngramKey, EngramError> {
-    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
-        EngramError::InvalidInput("key must be exactly 32 bytes".to_string())
-    })?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| EngramError::InvalidInput("key must be exactly 32 bytes".to_string()))?;
     Ok(EngramKey::from_bytes(arr))
 }
 
@@ -98,7 +93,9 @@ pub fn decrypt_bytes(key_bytes: Vec<u8>, ciphertext: Vec<u8>) -> Result<Vec<u8>,
 
 pub fn vault_read(vault_path: String, relative_path: String) -> Result<String, EngramError> {
     let vault = Vault::new(&vault_path);
-    vault.read(&relative_path).map_err(|e| EngramError::Vault(e.to_string()))
+    vault
+        .read(&relative_path)
+        .map_err(|e| EngramError::Vault(e.to_string()))
 }
 
 pub fn vault_write(
@@ -107,19 +104,22 @@ pub fn vault_write(
     content: String,
 ) -> Result<(), EngramError> {
     let vault = Vault::new(&vault_path);
-    vault.write(&relative_path, &content).map_err(|e| EngramError::Vault(e.to_string()))
+    vault
+        .write(&relative_path, &content)
+        .map_err(|e| EngramError::Vault(e.to_string()))
 }
 
 pub fn vault_list_markdown(vault_path: String) -> Result<Vec<String>, EngramError> {
     let vault = Vault::new(&vault_path);
-    vault.list_markdown().map_err(|e| EngramError::Vault(e.to_string()))
+    vault
+        .list_markdown()
+        .map_err(|e| EngramError::Vault(e.to_string()))
 }
 
 // ── store types & handle ─────────────────────────────────────────────────────
 
 /// An FFI-safe representation of a memory record.
-///
-/// NOTE: #[derive(uniffi::Record)] will be restored in Task 6.
+/// uniffi::Record semantics are provided by the UDL definition (dictionary MemoryRecord).
 #[derive(Debug, Clone)]
 pub struct MemoryRecord {
     pub id: String,
@@ -132,8 +132,7 @@ pub struct MemoryRecord {
 }
 
 /// A thread-safe, opaque handle to the encrypted memory store.
-///
-/// NOTE: #[derive(uniffi::Object)] and #[uniffi::export] will be restored in Task 6.
+/// uniffi::Object semantics are provided by the UDL definition (interface MemoryStoreHandle).
 pub struct MemoryStoreHandle {
     inner: Mutex<MemoryStore>,
 }
@@ -143,11 +142,20 @@ impl MemoryStoreHandle {
     ///
     /// Returns `InvalidInput` if `key_bytes` is not exactly 32 bytes.
     /// Returns `Store` if the database cannot be opened.
-    pub fn new(db_path: String, key_bytes: Vec<u8>) -> Result<Arc<Self>, EngramError> {
+    /// Open (or create) an encrypted memory store at `db_path` using `key_bytes`.
+    ///
+    /// Returns `InvalidInput` if `key_bytes` is not exactly 32 bytes.
+    /// Returns `Store` if the database cannot be opened.
+    ///
+    /// Note: returns `Arc<Self>` so callers (including tests) can share the handle.
+    /// The UDL scaffolding calls this constructor and handles the Arc wrapping at the FFI boundary.
+    pub fn new(db_path: String, key_bytes: Vec<u8>) -> Result<Self, EngramError> {
         let key = bytes_to_key(key_bytes)?;
         let store = MemoryStore::open(Path::new(&db_path), &key)
             .map_err(|e| EngramError::Store(e.to_string()))?;
-        Ok(Arc::new(Self { inner: Mutex::new(store) }))
+        Ok(Self {
+            inner: Mutex::new(store),
+        })
     }
 
     /// Create and insert a new memory record for the given entity/attribute/value triple.
@@ -207,10 +215,13 @@ mod tests {
     fn test_vault_write_then_read() {
         let dir = TempDir::new().unwrap();
         let vault_path = dir.path().to_str().unwrap().to_string();
-        vault_write(vault_path.clone(), "note.md".to_string(), "hello vault".to_string())
-            .expect("vault_write failed");
-        let content =
-            vault_read(vault_path, "note.md".to_string()).expect("vault_read failed");
+        vault_write(
+            vault_path.clone(),
+            "note.md".to_string(),
+            "hello vault".to_string(),
+        )
+        .expect("vault_write failed");
+        let content = vault_read(vault_path, "note.md".to_string()).expect("vault_read failed");
         assert_eq!(content, "hello vault");
     }
 
@@ -218,12 +229,35 @@ mod tests {
     fn test_vault_list_markdown_returns_only_md_files() {
         let dir = TempDir::new().unwrap();
         let vault_path = dir.path().to_str().unwrap().to_string();
-        vault_write(vault_path.clone(), "a.md".to_string(), "content a".to_string()).unwrap();
-        vault_write(vault_path.clone(), "b.md".to_string(), "content b".to_string()).unwrap();
-        vault_write(vault_path.clone(), "image.png".to_string(), "binary".to_string()).unwrap();
+        vault_write(
+            vault_path.clone(),
+            "a.md".to_string(),
+            "content a".to_string(),
+        )
+        .unwrap();
+        vault_write(
+            vault_path.clone(),
+            "b.md".to_string(),
+            "content b".to_string(),
+        )
+        .unwrap();
+        vault_write(
+            vault_path.clone(),
+            "image.png".to_string(),
+            "binary".to_string(),
+        )
+        .unwrap();
         let files = vault_list_markdown(vault_path).expect("vault_list_markdown failed");
-        assert!(files.contains(&"a.md".to_string()), "a.md missing from list: {:?}", files);
-        assert!(files.contains(&"b.md".to_string()), "b.md missing from list: {:?}", files);
+        assert!(
+            files.contains(&"a.md".to_string()),
+            "a.md missing from list: {:?}",
+            files
+        );
+        assert!(
+            files.contains(&"b.md".to_string()),
+            "b.md missing from list: {:?}",
+            files
+        );
         assert!(
             !files.contains(&"image.png".to_string()),
             "image.png should not appear in markdown list: {:?}",
@@ -252,13 +286,15 @@ mod tests {
     #[test]
     fn test_ffi_encrypt_decrypt_roundtrip() {
         let salt = generate_salt();
-        let key_bytes =
-            derive_key("test_password".to_string(), salt).expect("derive_key failed");
+        let key_bytes = derive_key("test_password".to_string(), salt).expect("derive_key failed");
         let plaintext = b"hello, ffi!".to_vec();
         let ciphertext =
             encrypt_bytes(key_bytes.clone(), plaintext.clone()).expect("encrypt_bytes failed");
         let decrypted = decrypt_bytes(key_bytes, ciphertext).expect("decrypt_bytes failed");
-        assert_eq!(decrypted, plaintext, "decrypted must equal original plaintext");
+        assert_eq!(
+            decrypted, plaintext,
+            "decrypted must equal original plaintext"
+        );
     }
 
     #[test]
@@ -302,7 +338,7 @@ mod tests {
         let key_bytes = vec![0u8; 32];
         let handle = MemoryStoreHandle::new(db_path.to_str().unwrap().to_string(), key_bytes)
             .expect("failed to create test store");
-        (handle, dir)
+        (std::sync::Arc::new(handle), dir)
     }
 
     #[test]

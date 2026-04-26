@@ -16,10 +16,14 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 hex = "0.4"
-uniffi = { version = "0.28", features = ["build"] }
+uniffi = { version = "0.28", features = ["build", "cli"] }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

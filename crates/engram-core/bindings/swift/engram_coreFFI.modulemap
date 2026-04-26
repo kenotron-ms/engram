@@ -1,0 +1,4 @@
+module engram_coreFFI {
+    header "engram_coreFFI.h"
+    export *
+}
