@@ -524,9 +524,7 @@ fn show_vault_diff(vault_path: &Path) {
                     } else {
                         "changed"
                     };
-                    let file = line.trim_start_matches(|c: char| {
-                        c.is_ascii_uppercase() || c == '?' || c == ' '
-                    });
+                    let file = line.get(3..).unwrap_or(line).trim_end();
                     println!("  {} {}", label, file);
                 }
             }
