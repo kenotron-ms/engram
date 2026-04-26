@@ -1,5 +1,6 @@
 // engram-cli — Personal memory assistant CLI
 
+mod awareness;
 mod daemon;
 mod install;
 mod load;
@@ -102,6 +103,15 @@ enum Commands {
     Uninstall,
     /// Run diagnostics on the engram installation
     Doctor,
+    /// Show vault domain structure as an AI context block
+    Awareness {
+        /// Vault name or path (defaults to all configured vaults)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Show all vaults including inactive ones
+        #[arg(long)]
+        all: bool,
+    },
     /// Manage vault configuration
     Vault {
         #[command(subcommand)]
@@ -246,6 +256,7 @@ fn main() {
         Commands::Install => run_install(),
         Commands::Uninstall => run_uninstall(),
         Commands::Doctor => run_doctor(),
+        Commands::Awareness { vault, all } => run_awareness(vault.as_deref(), all),
         Commands::Vault { command } => match command {
             VaultCommands::List => run_vault_list(),
             VaultCommands::Add {
@@ -1415,6 +1426,102 @@ fn run_doctor() {
         Ok(v) if !v.is_empty() => println!("ANTHROPIC_API_KEY: set \u{2713}"),
         _ => println!("ANTHROPIC_API_KEY: not set"),
     }
+}
+
+/// Collect the active vaults to display in `engram awareness`.
+///
+/// Priority:
+/// 1. If `vault_arg` is given and looks like a filesystem path (starts with `/` or `~`),
+///    use it directly as a vault root.
+/// 2. If `vault_arg` is given otherwise, look it up in the config by name; fall through
+///    to treating it as a path if not found.
+/// 3. If `vault_arg` is `None`: return all configured vaults, then the auto-detected
+///    project vault (`.lifeos/memory` in cwd), then the hardcoded fallback if the
+///    list would otherwise be empty.
+///
+/// Returns `Vec<(name, path, access_str)>`.
+fn collect_active_vaults(vault_arg: Option<&str>) -> Vec<(String, PathBuf, String)> {
+    if let Some(arg) = vault_arg {
+        // Absolute paths and tilde-paths are used directly.
+        if arg.starts_with('/') || arg.starts_with('~') {
+            let path = shellexpand_path(arg);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| arg.to_string());
+            return vec![(name, path, "read-write".to_string())];
+        }
+
+        // Try a config name lookup first.
+        let config = EngramConfig::load();
+        if let Some(entry) = config.get_vault(arg) {
+            let access_str = match &entry.access {
+                VaultAccess::Read => "read".to_string(),
+                VaultAccess::ReadWrite => "read-write".to_string(),
+            };
+            return vec![(arg.to_string(), entry.path.clone(), access_str)];
+        }
+
+        // Fall back to treating arg as a relative (or otherwise non-~ non-/) path.
+        let path = PathBuf::from(arg);
+        return vec![(arg.to_string(), path, "read-write".to_string())];
+    }
+
+    // No vault_arg: collect all configured vaults.
+    let config = EngramConfig::load();
+    let mut vaults: Vec<(String, PathBuf, String)> = config
+        .vaults
+        .iter()
+        .map(|(name, entry)| {
+            let access_str = match &entry.access {
+                VaultAccess::Read => "read".to_string(),
+                VaultAccess::ReadWrite => "read-write".to_string(),
+            };
+            (name.clone(), entry.path.clone(), access_str)
+        })
+        .collect();
+
+    // Auto-detect `.lifeos/memory` in the current working directory.
+    if let Ok(cwd) = std::env::current_dir() {
+        let project_vault = cwd.join(".lifeos/memory");
+        if project_vault.exists() {
+            vaults.push(("project".to_string(), project_vault, "read-write".to_string()));
+        }
+    }
+
+    // Hardcoded fallback when no vaults are found at all.
+    if vaults.is_empty() {
+        let fallback = UserDirs::new()
+            .map(|u| u.home_dir().join(".lifeos/memory"))
+            .unwrap_or_else(|| PathBuf::from(".lifeos/memory"));
+        vaults.push(("default".to_string(), fallback, "read-write".to_string()));
+    }
+
+    vaults
+}
+
+/// Emit vault domain structure as an `<engram-context>` block.
+///
+/// For each collected vault:
+/// - Prints a header line: `vault: <name> | <path> | <total> files | <access>`
+/// - Prints a domains line if any domains were found: `domains: Domain1 (N) · Domain2 (M)`
+fn run_awareness(vault_arg: Option<&str>, _all: bool) {
+    let vaults = collect_active_vaults(vault_arg);
+    println!("<engram-context>");
+    for (name, path, access) in &vaults {
+        let (total, domains) = awareness::vault_domain_summary(path);
+        println!(
+            "vault: {} | {} | {} files | {}",
+            name,
+            path.display(),
+            total,
+            access
+        );
+        if !domains.is_empty() {
+            println!("domains: {}", domains);
+        }
+    }
+    println!("</engram-context>");
 }
 
 /// List configured vaults from the engram config file.
