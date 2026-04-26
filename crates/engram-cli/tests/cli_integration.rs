@@ -133,6 +133,36 @@ fn test_sync_subcommand_help_shows_backend_flag() {
         .stdout(predicate::str::contains("--backend"));
 }
 
+/// `engram sync --help` must show the --vault flag (task-6).
+#[test]
+fn test_sync_help_shows_vault_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["sync", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--vault"));
+}
+
+/// `engram sync --help` must show the --approve flag (task-6).
+#[test]
+fn test_sync_help_shows_approve_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["sync", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--approve"));
+}
+
+/// `engram search --help` must show the --vault flag (task-6).
+#[test]
+fn test_search_help_shows_vault_flag() {
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.args(["search", "--help"]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--vault"));
+}
+
 // ── OneDrive / Azure / GCS backend flag tests ─────────────────────────────────
 
 /// `engram auth add onedrive --help` must show the --folder flag.
@@ -466,14 +496,22 @@ fn test_status_search_index_shows_valid_state() {
     );
 }
 
-/// `engram index --vault /nonexistent` must exit non-zero and print "Vault not found" to stderr.
+/// `engram index --vault <nonexistent-name>` must exit non-zero when the vault name is not
+/// registered in the config.  Uses ENGRAM_CONFIG_PATH to guarantee an empty config so the
+/// vault name lookup always fails predictably, and asserts that "not found" appears in stderr.
 #[test]
 fn test_index_nonexistent_vault_exits_nonzero() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    // Point to a nonexistent config file — EngramConfig::load() will return an empty config.
+    let config_path = dir.path().join("empty-config.toml");
+
     let mut cmd = Command::cargo_bin("engram").unwrap();
-    cmd.args(["index", "--vault", "/tmp/nonexistent_engram_vault_xyz_abc"]);
+    cmd.env("ENGRAM_CONFIG_PATH", &config_path);
+    cmd.args(["index", "--vault", "nonexistent-vault-name"]);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("Vault not found"));
+        .stderr(predicate::str::contains("not found"));
 }
 
 // ─── engram observe tests (Task 4) ──────────────────────────────────────────

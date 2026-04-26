@@ -47,12 +47,18 @@ enum Commands {
         /// Force a specific backend (s3, onedrive, azure, gcs)
         #[arg(long)]
         backend: Option<String>,
+        /// Vault name to sync (defaults to the configured default vault)
+        #[arg(long)]
+        vault: Option<String>,
+        /// Auto-approve sync changes without interactive review
+        #[arg(long)]
+        approve: bool,
     },
     /// Index vault markdown files for full-text search
     Index {
-        /// Vault path (defaults to ~/.lifeos/memory)
+        /// Vault name (defaults to the configured default vault)
         #[arg(long)]
-        vault: Option<PathBuf>,
+        vault: Option<String>,
         /// Force a full reindex by wiping the search index first
         #[arg(long)]
         force: bool,
@@ -61,6 +67,9 @@ enum Commands {
     Search {
         /// Query string
         query: String,
+        /// Vault name to search (defaults to the configured default vault)
+        #[arg(long)]
+        vault: Option<String>,
         /// Maximum number of results to return
         #[arg(long, default_value_t = 10)]
         limit: usize,
@@ -217,9 +226,16 @@ fn main() {
             AuthCommands::List => run_auth_list(),
             AuthCommands::Remove { backend } => run_auth_remove(&backend),
         },
-        Commands::Sync { backend } => run_sync(backend.as_deref()),
-        Commands::Index { vault, force } => run_index(vault, force),
-        Commands::Search { query, limit, mode } => run_search(&query, limit, &mode),
+        Commands::Sync { backend, vault, approve } => {
+            run_sync(backend.as_deref(), vault.as_deref(), approve)
+        }
+        Commands::Index { vault, force } => run_index(vault.as_deref(), force),
+        Commands::Search {
+            query,
+            vault,
+            limit,
+            mode,
+        } => run_search(&query, vault.as_deref(), limit, &mode),
         Commands::Observe {
             session_path,
             api_key,
@@ -473,7 +489,10 @@ fn run_auth_remove(backend: &str) {
     }
 }
 
-fn run_sync(backend_name: Option<&str>) {
+fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) {
+    // vault_arg and approve are reserved for future tasks (7-8); stub them out here.
+    let _ = vault_arg;
+    let _ = approve;
     use engram_core::{crypto::KeyStore, vault::Vault};
     use engram_sync::{
         auth::AuthStore, backend::SyncBackend, encrypt::encrypt_for_sync,
@@ -606,7 +625,6 @@ fn shellexpand_path(p: &str) -> PathBuf {
 /// 2. Auto-detected project vault (`.lifeos/memory` in the current working directory).
 /// 3. Config default vault (first entry marked `default = true`, or first alphabetically).
 /// 4. Hardcoded fallback: `~/.lifeos/memory`.
-#[allow(dead_code)]
 fn resolve_vault(name_override: Option<&str>) -> PathBuf {
     let config = EngramConfig::load();
 
@@ -702,6 +720,7 @@ fn default_search_dir() -> PathBuf {
 }
 
 /// Returns the default vector index path: `~/.engram/vectors.db`.
+#[allow(dead_code)]
 fn default_vectors_path() -> PathBuf {
     UserDirs::new()
         .map(|u| u.home_dir().join(".engram/vectors.db"))
@@ -730,19 +749,29 @@ fn dir_size_bytes(path: &Path) -> u64 {
 
 /// Index vault markdown files for full-text search with content-hash deduplication,
 /// and embed all files into the sqlite-vec vector store.
-fn run_index(vault_path: Option<PathBuf>, force: bool) {
+fn run_index(vault_arg: Option<&str>, force: bool) {
     use engram_search::embedder::Embedder;
     use engram_search::vector::VectorIndex;
 
-    let vault_path = vault_path.unwrap_or_else(default_vault_path);
+    // Determine the vault name for per-vault storage directories.
+    let vault_name = vault_arg.map(|s| s.to_string()).unwrap_or_else(|| {
+        let config = EngramConfig::load();
+        config
+            .default_vault()
+            .map(|(n, _)| n.to_string())
+            .unwrap_or_else(|| "default".to_string())
+    });
+
+    // Resolve the actual filesystem path where markdown files live.
+    let vault_path = resolve_vault(vault_arg);
 
     if !vault_path.exists() {
         eprintln!("Vault not found: {}", vault_path.display());
         std::process::exit(1);
     }
 
-    let search_dir = default_search_dir();
-    let vectors_path = default_vectors_path();
+    let search_dir = vault_storage_dir(&vault_name).join("search");
+    let vectors_path = vault_storage_dir(&vault_name).join("vectors.db");
 
     // --force: wipe both the search index and vector store so every file is
     // reindexed from scratch.
@@ -857,12 +886,21 @@ fn run_index(vault_path: Option<PathBuf>, force: bool) {
 }
 
 /// Search the indexed vault using the specified mode.
-fn run_search(query: &str, limit: usize, mode: &SearchMode) {
+fn run_search(query: &str, vault_arg: Option<&str>, limit: usize, mode: &SearchMode) {
     use engram_search::embedder::Embedder;
     use engram_search::hybrid::HybridSearch;
     use engram_search::vector::VectorIndex;
 
-    let search_dir = default_search_dir();
+    // Determine the vault name for per-vault storage directories.
+    let vault_name = vault_arg.map(|s| s.to_string()).unwrap_or_else(|| {
+        let config = EngramConfig::load();
+        config
+            .default_vault()
+            .map(|(n, _)| n.to_string())
+            .unwrap_or_else(|| "default".to_string())
+    });
+
+    let search_dir = vault_storage_dir(&vault_name).join("search");
 
     // Check search index exists.
     if !search_dir.join("meta.json").exists() {
@@ -888,7 +926,7 @@ fn run_search(query: &str, limit: usize, mode: &SearchMode) {
         },
 
         SearchMode::Vector => {
-            let vectors_path = default_vectors_path();
+            let vectors_path = vault_storage_dir(&vault_name).join("vectors.db");
             let vector_index = match VectorIndex::open(&vectors_path) {
                 Ok(v) => v,
                 Err(e) => {
@@ -928,7 +966,7 @@ fn run_search(query: &str, limit: usize, mode: &SearchMode) {
         }
 
         SearchMode::Hybrid => {
-            let vectors_path = default_vectors_path();
+            let vectors_path = vault_storage_dir(&vault_name).join("vectors.db");
             let vector_index = match VectorIndex::open(&vectors_path) {
                 Ok(v) => v,
                 Err(e) => {
