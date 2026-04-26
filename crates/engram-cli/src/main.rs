@@ -40,6 +40,8 @@ struct Cli {
 enum Commands {
     /// Print vault state, memory store stats, and keyring status
     Status,
+    /// Initialise the vault: generate salt, prompt for passphrase, write config
+    Init,
     /// Manage sync backend authentication
     Auth {
         #[command(subcommand)]
@@ -210,6 +212,7 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Status => run_status(),
+        Commands::Init => run_init(),
         Commands::Auth { command } => match command {
             AuthCommands::Add { backend } => match backend {
                 BackendCommands::S3 {
@@ -320,6 +323,65 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         .map_err(|e| format!("Failed to read passphrase: {}", e))?;
     engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
         .map_err(|e| format!("Key derivation failed: {}", e))
+}
+
+/// Initialise the vault: generate salt, prompt for passphrase, write config.
+fn run_init() {
+    use engram_core::crypto::{generate_salt, EngramKey};
+
+    let mut config = EngramConfig::load();
+
+    // Idempotency guard: if a salt already exists, nothing to do.
+    if config.key.salt.is_some() {
+        println!("Vault already initialized.");
+        return;
+    }
+
+    // Resolve passphrase: env var or interactive prompt.
+    let passphrase = if let Ok(p) = std::env::var("ENGRAM_VAULT_PASSPHRASE") {
+        p
+    } else {
+        // Interactive path: prompt + confirmation, reject empty.
+        let first = rpassword::prompt_password("Vault passphrase: ")
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to read passphrase: {}", e);
+                std::process::exit(1);
+            });
+        if first.is_empty() {
+            eprintln!("Passphrase must not be empty.");
+            std::process::exit(1);
+        }
+        let confirm = rpassword::prompt_password("Confirm passphrase: ")
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to read passphrase confirmation: {}", e);
+                std::process::exit(1);
+            });
+        if first != confirm {
+            eprintln!("Passphrases do not match.");
+            std::process::exit(1);
+        }
+        first
+    };
+
+    // Generate a fresh random salt.
+    let salt = generate_salt();
+
+    // Verify key derivation succeeds before persisting anything.
+    if let Err(e) = EngramKey::derive(passphrase.as_bytes(), &salt) {
+        eprintln!("Key derivation failed: {}", e);
+        std::process::exit(1);
+    }
+
+    // Persist: store the base64-encoded salt in the config, then save.
+    config.key.salt = Some(B64.encode(salt));
+    let config_path = EngramConfig::config_path();
+    if let Err(e) = config.save() {
+        eprintln!("Failed to save config: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("✓ Vault initialised. Config written to: {}", config_path.display());
+    println!("  Tip: set ENGRAM_VAULT_PASSPHRASE to avoid interactive prompts.");
 }
 
 fn run_mcp() {
