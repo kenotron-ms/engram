@@ -66,9 +66,9 @@ pub struct KeyConfig {
     pub salt: Option<String>,
 }
 
-/// Remote-sync credentials for a vault.
+/// Per-vault credential store for sync backends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SyncCredentials {
+pub struct VaultSyncCredentials {
     /// Backend identifier (e.g. "s3", "azure", "gdrive").
     pub backend: String,
     pub endpoint: Option<String>,
@@ -80,6 +80,13 @@ pub struct SyncCredentials {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub folder: Option<String>,
+}
+
+/// Credentials configuration mapping vault names to their sync credentials.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CredentialsConfig {
+    #[serde(default)]
+    pub vaults: BTreeMap<String, VaultSyncCredentials>,
 }
 
 /// A single registered vault.
@@ -94,8 +101,6 @@ pub struct VaultEntry {
     pub default: bool,
     #[serde(rename = "type")]
     pub vault_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub sync: Option<SyncCredentials>,
 }
 
 /// Top-level Engram configuration file.
@@ -261,7 +266,6 @@ mod tests {
             sync_mode: SyncMode::Approval,
             default: true,
             vault_type: Some("git".to_string()),
-            sync: None,
         };
         let s = toml::to_string(&entry).expect("serialise VaultEntry");
         // The serde rename("type") must produce a "type" key, not "vault_type".
@@ -316,7 +320,6 @@ mod tests {
                 sync_mode: SyncMode::Approval,
                 default: true,
                 vault_type: Some("git".to_string()),
-                sync: None,
             },
         );
 
@@ -352,7 +355,6 @@ default = false
             sync_mode: SyncMode::Approval,
             default: is_default,
             vault_type: None,
-            sync: None,
         }
     }
 
@@ -462,37 +464,7 @@ default = false
         assert_eq!(parsed.salt, Some("c2FsdHNhbHR2YWx1ZQ==".to_string()));
     }
 
-    #[test]
-    fn test_sync_credentials_roundtrip() {
-        let entry = VaultEntry {
-            path: PathBuf::from("/vaults/synced"),
-            access: VaultAccess::ReadWrite,
-            sync_mode: SyncMode::Auto,
-            default: false,
-            vault_type: None,
-            sync: Some(SyncCredentials {
-                backend: "s3".to_string(),
-                bucket: Some("my-bucket".to_string()),
-                access_key: Some("AKID".to_string()),
-                secret_key: Some("secret".to_string()),
-                endpoint: None,
-                container: None,
-                account: None,
-                access_token: None,
-                refresh_token: None,
-                folder: None,
-            }),
-        };
-        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry with sync");
-        let parsed: VaultEntry =
-            toml::from_str(&toml_str).expect("deserialize VaultEntry with sync");
-        let sync = parsed.sync.expect("sync should be present after roundtrip");
-        assert_eq!(sync.backend, "s3");
-        assert_eq!(sync.bucket, Some("my-bucket".to_string()));
-        assert_eq!(sync.access_key, Some("AKID".to_string()));
-        assert_eq!(sync.secret_key, Some("secret".to_string()));
-        assert!(sync.endpoint.is_none());
-    }
+
 
     #[test]
     fn test_config_missing_key_section_uses_default() {
@@ -536,21 +508,80 @@ default = false
     }
 
     #[test]
-    fn test_sync_field_absent_when_none() {
+    fn test_vault_entry_has_no_sync_section_in_toml() {
         let entry = VaultEntry {
             path: PathBuf::from("/vaults/no-sync"),
             access: VaultAccess::ReadWrite,
             sync_mode: SyncMode::Approval,
             default: false,
             vault_type: None,
-            sync: None,
         };
-        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry with sync = None");
-        // "sync_mode" is a different field; we check that the [sync] table (sync credentials)
-        // is absent when the field is None.
+        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry");
+        // The serialized form must not contain a [sync] table.
         assert!(
             !toml_str.contains("[sync]"),
-            "sync table section should be absent when None:\n{toml_str}"
+            "sync table section should be absent:\n{toml_str}"
+        );
+        // sync_mode is still serialized correctly.
+        assert!(
+            toml_str.contains("sync_mode"),
+            "sync_mode field should still be present:\n{toml_str}"
+        );
+    }
+
+    // ── Task-1 new tests ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_credentials_config_default_is_empty() {
+        let creds = CredentialsConfig::default();
+        assert!(
+            creds.vaults.is_empty(),
+            "CredentialsConfig default should have an empty vaults map"
+        );
+    }
+
+    #[test]
+    fn test_credentials_config_roundtrip() {
+        let mut creds = CredentialsConfig::default();
+        creds.vaults.insert(
+            "work".to_string(),
+            VaultSyncCredentials {
+                backend: "s3".to_string(),
+                bucket: Some("my-bucket".to_string()),
+                access_key: Some("AKID123".to_string()),
+                secret_key: Some("secret456".to_string()),
+                endpoint: None,
+                container: None,
+                account: None,
+                access_token: None,
+                refresh_token: None,
+                folder: None,
+            },
+        );
+
+        let toml_str = toml::to_string(&creds).expect("serialize CredentialsConfig");
+        let parsed: CredentialsConfig =
+            toml::from_str(&toml_str).expect("deserialize CredentialsConfig");
+
+        let vault = parsed.vaults.get("work").expect("work vault missing after roundtrip");
+        assert_eq!(vault.backend, "s3");
+        assert_eq!(vault.access_key, Some("AKID123".to_string()));
+    }
+
+    #[test]
+    fn test_vault_entry_has_no_sync_field() {
+        let entry = VaultEntry {
+            path: PathBuf::from("/vaults/test"),
+            access: VaultAccess::ReadWrite,
+            sync_mode: SyncMode::Manual,
+            default: false,
+            vault_type: None,
+        };
+        let toml_str = toml::to_string(&entry).expect("serialize VaultEntry");
+        // The serialized TOML must not contain the string "sync" at all as a key.
+        assert!(
+            !toml_str.contains("\nsync ") && !toml_str.contains("\nsync="),
+            "VaultEntry TOML should not contain a 'sync' key:\n{toml_str}"
         );
     }
 }
