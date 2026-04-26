@@ -1703,13 +1703,48 @@ fn run_status() {
     println!("{}", "\u{2500}".repeat(41));
 
     // ── Vault status ──────────────────────────────────────────────────────────
-    let vault_path = default_vault_path_from_config(&config);
-    if vault_path.exists() {
-        let vault = Vault::new(&vault_path);
-        let count = vault.list_markdown().map(|files| files.len()).unwrap_or(0);
-        println!("Vault:        {} ({} files)", vault_path.display(), count);
+    if config.vaults.is_empty() {
+        // Legacy path: show single default vault path with file count.
+        let vault_path = default_vault_path_from_config(&config);
+        if vault_path.exists() {
+            let vault = Vault::new(&vault_path);
+            let count = vault.list_markdown().map(|files| files.len()).unwrap_or(0);
+            println!("Vault:        {} ({} files)", vault_path.display(), count);
+        } else {
+            println!("Vault:        {} (NOT FOUND)", vault_path.display());
+        }
     } else {
-        println!("Vault:        {} (NOT FOUND)", vault_path.display());
+        // Multi-vault path: print 'Vaults:' header then each configured vault.
+        println!("Vaults:");
+        let default_name = config.default_vault().map(|(n, _)| n.to_string());
+        for (name, entry) in &config.vaults {
+            let exists_marker = if entry.path.exists() {
+                '\u{2713}' // ✓
+            } else {
+                '\u{2717}' // ✗
+            };
+            let is_default = default_name.as_deref() == Some(name.as_str());
+            let default_tag = if is_default { " [default]" } else { "" };
+            let access_str = match &entry.access {
+                VaultAccess::Read => "read",
+                VaultAccess::ReadWrite => "read-write",
+            };
+            let sync_str = match &entry.sync_mode {
+                SyncMode::Auto => "auto",
+                SyncMode::Approval => "approval",
+                SyncMode::Manual => "manual",
+            };
+            let count = if entry.path.exists() {
+                let vault = Vault::new(&entry.path);
+                vault.list_markdown().map(|f| f.len()).unwrap_or(0)
+            } else {
+                0
+            };
+            println!(
+                "  {} {}{} \u{2014} {} files  {} \u{00B7} {}",
+                exists_marker, name, default_tag, count, access_str, sync_str
+            );
+        }
     }
 
     // ── Memory store status ───────────────────────────────────────────────────

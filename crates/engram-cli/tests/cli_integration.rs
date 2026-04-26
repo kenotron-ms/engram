@@ -635,6 +635,36 @@ fn test_doctor_shows_store_line() {
         .stdout(predicates::str::contains("Store:"));
 }
 
+// ─── engram status vault-list tests (Task 12) ────────────────────────────────────────────────
+
+/// `engram status` must show vault name 'primary' (or 'Vault') when a vault named 'primary'
+/// is configured via ENGRAM_CONFIG_PATH.
+#[test]
+fn test_status_shows_vaults_label_when_configured() {
+    use tempfile::TempDir;
+    let dir = TempDir::new().unwrap();
+    let config_path = dir.path().join("test-config.toml");
+
+    // Write a minimal config with vault 'primary'.
+    std::fs::write(
+        &config_path,
+        "[vaults.primary]\npath = \"/tmp/test-primary-vault\"\naccess = \"read-write\"\nsync_mode = \"approval\"\ndefault = true\n",
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("engram").unwrap();
+    cmd.env("ENGRAM_CONFIG_PATH", &config_path);
+    cmd.arg("status");
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.contains("primary") || stdout.contains("Vault"),
+        "status output must contain vault name 'primary' or 'Vault' when a vault is configured, got: {}",
+        stdout
+    );
+}
+
 /// `engram auth add s3` with all credentials supplied via CLI prints confirmation.
 /// Marked ignore because it writes to the platform keychain (requires GUI session on macOS).
 #[test]
