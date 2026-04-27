@@ -71,14 +71,25 @@ fn scan_dir(
             entry.map_err(|e| SyncError::Io(format!("dir entry in {}: {e}", dir.display())))?;
         let path = entry.path();
 
-        if path.is_dir() {
+        // Fix 3: Use entry.file_type() instead of path.is_dir() to avoid following symlinks.
+        let ft = entry
+            .file_type()
+            .map_err(|e| SyncError::Io(format!("file_type {}: {e}", path.display())))?;
+        if ft.is_dir() {
             scan_dir(vault_root, &path, manifest)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+        } else if ft.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+            // Fix 4: Fail fast on non-UTF-8 paths instead of silently mangling them.
             let relative = path
                 .strip_prefix(vault_root)
-                .map_err(|e| SyncError::Io(format!("strip_prefix: {e}")))?
-                .to_string_lossy()
-                .into_owned();
+                .map_err(|_| {
+                    SyncError::Io(format!(
+                        "path not under vault root: {}",
+                        path.display()
+                    ))
+                })?
+                .to_str()
+                .ok_or_else(|| SyncError::Io(format!("non-UTF-8 path: {}", path.display())))?
+                .replace('\\', "/");
 
             let meta = std::fs::metadata(&path)
                 .map_err(|e| SyncError::Io(format!("metadata {}: {e}", path.display())))?;
@@ -107,7 +118,9 @@ fn scan_dir(
     Ok(())
 }
 
-/// Summary of a completed bisync run.
+/// Result of a bisync run.
+/// On any error, the function returns Err(...). Partial results are discarded.
+// Fix 5: Removed dead `errors` field — errors propagate via Err return, not accumulated here.
 #[derive(Debug, Default)]
 pub struct BiSyncResult {
     pub uploaded: usize,
@@ -115,7 +128,6 @@ pub struct BiSyncResult {
     pub conflicts_resolved: usize,
     pub deleted_local: usize,
     pub deleted_remote: usize,
-    pub errors: Vec<String>,
 }
 
 /// Run bisync for a single vault.
@@ -178,8 +190,11 @@ pub async fn run_bisync<B: SyncBackend>(
             ChangeKind::RemoteOnly | ChangeKind::NewRemote => {
                 let encrypted = backend.pull(&change.path).await?;
                 let content = decrypt_from_sync(key, &encrypted)?;
+                // Fix 5: Propagate create_dir_all errors instead of swallowing with .ok().
                 if let Some(parent) = local_file.parent() {
-                    std::fs::create_dir_all(parent).ok();
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        SyncError::Io(format!("create_dir {}: {e}", parent.display()))
+                    })?;
                 }
                 std::fs::write(&local_file, &content).map_err(|e| {
                     SyncError::Io(format!("write {}: {e}", change.path))
@@ -197,10 +212,16 @@ pub async fn run_bisync<B: SyncBackend>(
                     let remote_encrypted = backend.pull(&change.path).await?;
                     let remote_content = decrypt_from_sync(key, &remote_encrypted)?;
                     let conflict_local = vault_path.join(&conflict_path);
+                    // Fix 5: Propagate create_dir_all errors.
                     if let Some(parent) = conflict_local.parent() {
-                        std::fs::create_dir_all(parent).ok();
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            SyncError::Io(format!("create_dir {}: {e}", parent.display()))
+                        })?;
                     }
-                    std::fs::write(&conflict_local, &remote_content).ok();
+                    // Fix 1: Propagate write errors for conflict copy instead of swallowing.
+                    std::fs::write(&conflict_local, &remote_content).map_err(|e| {
+                        SyncError::Io(format!("write conflict copy {}: {e}", conflict_path))
+                    })?;
 
                     let content = std::fs::read(&local_file).map_err(|e| {
                         SyncError::Io(format!("read {}: {e}", change.path))
@@ -211,10 +232,16 @@ pub async fn run_bisync<B: SyncBackend>(
                     // Remote is newer: save local as a conflict copy, download remote.
                     let conflict_path = conflict_copy_name(&change.path, *local_mtime);
                     let conflict_local = vault_path.join(&conflict_path);
+                    // Fix 5: Propagate create_dir_all errors.
                     if let Some(parent) = conflict_local.parent() {
-                        std::fs::create_dir_all(parent).ok();
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            SyncError::Io(format!("create_dir {}: {e}", parent.display()))
+                        })?;
                     }
-                    std::fs::copy(&local_file, &conflict_local).ok();
+                    // Fix 1: Propagate copy errors for conflict copy instead of swallowing.
+                    std::fs::copy(&local_file, &conflict_local).map_err(|e| {
+                        SyncError::Io(format!("copy conflict {}: {e}", conflict_path))
+                    })?;
 
                     let encrypted = backend.pull(&change.path).await?;
                     let content = decrypt_from_sync(key, &encrypted)?;
@@ -239,8 +266,12 @@ pub async fn run_bisync<B: SyncBackend>(
     }
 
     // 6. Persist updated bisync state for the next run.
+    //    Fix 2: Re-scan vault after the change loop so that files written/downloaded
+    //    during sync are captured in the new baseline (avoids stale-baseline false positives).
+    let post_op_local = scan_vault_manifest(vault_path)
+        .map_err(|e| SyncError::Io(format!("post-op vault scan: {e}")))?;
     let new_state = BiSyncState {
-        baseline: local,
+        baseline: post_op_local,
         remote: remote_map,
     };
     new_state
