@@ -306,13 +306,14 @@ fn main() {
     }
 }
 
-/// Resolve the vault encryption key using a three-tier fallback strategy.
+/// Resolve the vault encryption key using a four-tier fallback strategy.
 ///
 /// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
 ///   into an [`engram_core::crypto::EngramKey`].
 /// Tier 2 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
 ///   derived using Argon2id with the salt stored in the engram config file.
-/// Tier 3 — Interactive `rpassword` prompt + salt from config.
+/// Tier 3 — macOS Keychain via `security find-generic-password`.
+/// Tier 4 — Interactive `rpassword` prompt + salt from config.
 ///
 /// Never panics. Returns a human-friendly `Err(String)` on failure.
 fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
@@ -343,7 +344,28 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
             .map_err(|e| format!("Key derivation failed: {}", e));
     }
 
-    // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
+    // ── Tier 3: macOS Keychain via security find-generic-password ─────────────────
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("security")
+            .args(["find-generic-password", "-a", "engram", "-s", "engram-vault", "-w"])
+            .output()
+        {
+            if output.status.success() {
+                let passphrase_raw = String::from_utf8_lossy(&output.stdout);
+                let passphrase = passphrase_raw.trim();
+                if let Some(salt) = load_salt() {
+                    if let Ok(key) =
+                        engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
+                    {
+                        return Ok(key);
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Tier 4: interactive rpassword prompt + config salt ────────────────────
     let salt =
         load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
     let passphrase = rpassword::prompt_password("Vault passphrase: ")
@@ -2396,6 +2418,78 @@ mod tests {
             err_msg.contains("base64"),
             "error should mention 'base64', got: {}",
             err_msg
+        );
+    }
+
+    /// Tier 3 (macOS Keychain): when an `engram-vault` entry exists in the login
+    /// keychain, `resolve_vault_key()` must return `Ok(_)` without an interactive
+    /// prompt.  The entry is added and removed around the test; if
+    /// `security add-generic-password` fails (e.g. CI without a login keychain),
+    /// the test is skipped rather than failing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[serial]
+    fn test_resolve_key_keychain_tier_uses_keychain_entry_when_present() {
+        use tempfile::TempDir;
+
+        // Attempt to add a temporary keychain entry.  If this fails we skip.
+        let add_status = std::process::Command::new("security")
+            .args([
+                "add-generic-password",
+                "-a",
+                "engram",
+                "-s",
+                "engram-vault",
+                "-w",
+                "keychain-test-passphrase",
+                "-U", // update if already present
+            ])
+            .status();
+
+        let Ok(status) = add_status else {
+            // `security` binary not available â skip.
+            return;
+        };
+        if !status.success() {
+            // Keychain unavailable in this environment â skip.
+            return;
+        }
+
+        // Cleanup guard: always delete the entry when we leave this test.
+        struct KeychainGuard;
+        impl Drop for KeychainGuard {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("security")
+                    .args([
+                        "delete-generic-password",
+                        "-a",
+                        "engram",
+                        "-s",
+                        "engram-vault",
+                    ])
+                    .output();
+            }
+        }
+        let _guard = KeychainGuard;
+
+        // Set up a temp config with a zero salt so key derivation can succeed.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let zero_salt = B64.encode([0u8; 16]);
+        std::fs::write(&config_path, format!("[key]\nsalt = \"{}\"\n", zero_salt)).unwrap();
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+
+        let result = resolve_vault_key();
+
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
+
+        assert!(
+            result.is_ok(),
+            "Tier 3 (macOS Keychain) should derive a key from the keychain entry; got: {:?}",
+            result
         );
     }
 
