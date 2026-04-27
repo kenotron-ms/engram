@@ -306,13 +306,15 @@ fn main() {
     }
 }
 
-/// Resolve the vault encryption key using a three-tier fallback strategy.
+/// Resolve the vault encryption key using a four-tier fallback strategy.
 ///
 /// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
 ///   into an [`engram_core::crypto::EngramKey`].
-/// Tier 2 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
+/// Tier 2 — `~/.engram/sync.key` file: base64-encoded 32 bytes, chmod 600.
+///   The id_rsa equivalent for headless daemon operation.
+/// Tier 3 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
 ///   derived using Argon2id with the salt stored in the engram config file.
-/// Tier 3 — Interactive `rpassword` prompt + salt from config.
+/// Tier 4 — Interactive `rpassword` prompt + salt from config.
 ///
 /// Never panics. Returns a human-friendly `Err(String)` on failure.
 fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
@@ -327,6 +329,23 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         return Ok(engram_core::crypto::EngramKey::from_bytes(key_bytes));
     }
 
+    // ── Tier 2: ~/.engram/sync.key file ───────────────────────────────
+    let key_path = engram_core::config::sync_key_path();
+    if key_path.exists() {
+        match engram_core::config::read_sync_key_file(&key_path) {
+            Ok(key_bytes) => {
+                return key_bytes
+                    .try_into()
+                    .map(engram_core::crypto::EngramKey::from_bytes)
+                    .map_err(|_| "sync.key: corrupt — expected 32 bytes".to_string());
+            }
+            Err(e) => {
+                eprintln!("  ! sync.key exists but could not be read: {e}");
+                // Fall through to next tier
+            }
+        }
+    }
+
     // Helper: load the 16-byte Argon2 salt from the engram config file.
     let load_salt = || -> Option<[u8; 16]> {
         let config = EngramConfig::load();
@@ -335,7 +354,7 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         bytes.try_into().ok()
     };
 
-    // ── Tier 2: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
+    // ── Tier 3: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
     if let Ok(passphrase) = std::env::var("ENGRAM_VAULT_PASSPHRASE") {
         let salt =
             load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
@@ -343,13 +362,31 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
             .map_err(|e| format!("Key derivation failed: {}", e));
     }
 
-    // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
+    // ── Tier 4: interactive rpassword prompt + config salt ────────────────────
     let salt =
         load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
     let passphrase = rpassword::prompt_password("Vault passphrase: ")
         .map_err(|e| format!("Failed to read passphrase: {}", e))?;
-    engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
-        .map_err(|e| format!("Key derivation failed: {}", e))
+    let key = engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
+        .map_err(|e| format!("Key derivation failed: {}", e))?;
+
+    // Offer to save for future headless access (only if sync.key does not exist yet).
+    if !key_path.exists() {
+        eprint!(
+            "Save key to {} for passwordless access? [Y/n] ",
+            key_path.display()
+        );
+        let mut answer = String::new();
+        let _ = std::io::stdin().read_line(&mut answer);
+        if answer.trim().is_empty() || answer.trim().eq_ignore_ascii_case("y") {
+            match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
+                Ok(_) => eprintln!("  ✓ Key saved to {} (chmod 600)", key_path.display()),
+                Err(e) => eprintln!("  ! Could not save key: {e}"),
+            }
+        }
+    }
+
+    Ok(key)
 }
 
 /// Initialise the vault: generate salt, prompt for passphrase, write config.
@@ -1761,6 +1798,30 @@ fn run_install() {
             std::process::exit(1);
         }
     }
+
+    // Write sync.key for headless daemon operation.
+    let key_path = engram_core::config::sync_key_path();
+    if key_path.exists() {
+        println!("\u{2713} sync.key already exists at {}", key_path.display());
+    } else {
+        println!(
+            "Setting up sync key (stored at {}, chmod 600)...",
+            key_path.display()
+        );
+        match resolve_vault_key() {
+            Ok(key) => {
+                match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
+                    Ok(_) => println!(
+                        "\u{2713} sync.key written \u{2014} daemon will start without passphrase prompt"
+                    ),
+                    Err(e) => eprintln!("  ! Could not write sync.key: {e}"),
+                }
+            }
+            Err(e) => eprintln!(
+                "  ! Could not derive key: {e} \u{2014} set ENGRAM_VAULT_KEY for headless operation"
+            ),
+        }
+    }
 }
 
 /// Uninstall the engram daemon system service.
@@ -1778,6 +1839,11 @@ fn run_uninstall() {
 fn doctor_key_method(config: &EngramConfig) -> String {
     if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
         "ENGRAM_VAULT_KEY env var \u{2713}".to_string()
+    } else if engram_core::config::sync_key_path().exists() {
+        format!(
+            "sync.key file ({}) \u{2713}",
+            engram_core::config::sync_key_path().display()
+        )
     } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
         "ENGRAM_VAULT_PASSPHRASE env var \u{2713}".to_string()
     } else if config.key.salt.is_some() {

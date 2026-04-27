@@ -63,3 +63,4 @@ Icon
 # fastembed local model cache (~90 MB binary weights)
 .fastembed_cache/
 */.fastembed_cache/
+.engram/sync.key
