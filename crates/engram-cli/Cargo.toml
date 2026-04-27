@@ -28,6 +28,7 @@
     notify = "6"
     shellexpand = "3"
     base64 = { version = "0.22", features = ["std"] }
+bytes = "1"
 
     [dev-dependencies]
     assert_cmd = "2"

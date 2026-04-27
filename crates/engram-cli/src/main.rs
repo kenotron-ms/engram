@@ -854,7 +854,11 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     // ── End sync mode gate ──────────────────────────────────────────────────
 
     use engram_sync::{
-        backend::SyncBackend, encrypt::encrypt_for_sync, onedrive::OneDriveBackend, s3::S3Backend,
+        backend::SyncBackend,
+        encrypt::encrypt_for_sync,
+        manifest::{FileEntry, SyncManifest},
+        onedrive::OneDriveBackend,
+        s3::S3Backend,
     };
 
     let vault = Vault::new(&vault_path);
@@ -923,17 +927,53 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         }
     };
 
-    println!(
-        "Syncing {} files via {} ...",
-        files.len(),
-        effective_backend
-    );
+    // ── Phase 1: Check (rclone-style delta detection) ──────────────────────
+    //
+    // Decision tree ordered cheapest → most expensive, mirroring rclone's
+    // equal() function:
+    //
+    //   1. size + mtime  (one fs::metadata() syscall, zero file reads)
+    //      → unchanged → SKIP
+    //   2. content hash  (file read + SHA-256; only when size/mtime differ)
+    //      → same hash  → SKIP (mtime drifted but content identical, e.g. editor save)
+    //      → different  → queue for upload
+    //
+    // We cannot use the remote ETag for deduplication because engram encrypts
+    // with a random nonce — identical plaintext produces different ciphertext
+    // on every push, so the remote-side hash is meaningless.  The manifest is
+    // our "last known remote state".
 
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    let mut success = 0usize;
+    let mut manifest = SyncManifest::load(&vault_name);
+    let mut to_upload: Vec<(String, engram_sync::Bytes, FileEntry)> = Vec::new();
+    let mut skipped_fast = 0usize;   // skipped by mtime+size (no file read)
+    let mut skipped_hash = 0usize;   // skipped by hash (content unchanged)
     let mut errors = 0usize;
 
     for relative_path in &files {
+        let full_path = vault.root().join(relative_path);
+
+        // ── Fast path: size + mtime (no file read) ────────────────────────
+        let meta = match std::fs::metadata(&full_path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("  ✗ {}: {}", relative_path, e);
+                errors += 1;
+                continue;
+            }
+        };
+        let size = meta.len();
+        let (mtime_secs, mtime_nanos) = meta
+            .modified()
+            .ok()
+            .map(SyncManifest::mtime_components)
+            .unwrap_or((0, 0));
+
+        if manifest.is_fast_match(relative_path, size, mtime_secs, mtime_nanos) {
+            skipped_fast += 1;
+            continue; // definitely unchanged — skip with zero file I/O
+        }
+
+        // ── Slow path: read + SHA-256 ─────────────────────────────────────
         let content = match vault.read(relative_path) {
             Ok(c) => c,
             Err(e) => {
@@ -942,6 +982,17 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
                 continue;
             }
         };
+        let hash = SyncManifest::content_hash(content.as_bytes());
+
+        if manifest.is_hash_match(relative_path, &hash) {
+            // Content identical — mtime just drifted.  Update the fast-path
+            // fields so the next sync skips with zero reads again.
+            manifest.update_fast_path(relative_path.clone(), size, mtime_secs, mtime_nanos);
+            skipped_hash += 1;
+            continue;
+        }
+
+        // ── Content changed → encrypt and queue ───────────────────────────
         let encrypted = match encrypt_for_sync(&key, content.as_bytes()) {
             Ok(e) => e,
             Err(e) => {
@@ -950,21 +1001,85 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
                 continue;
             }
         };
-        match runtime.block_on(backend.push(relative_path, encrypted)) {
-            Ok(_) => {
-                success += 1;
-            }
-            Err(e) => {
-                eprintln!("  ✗ {}: {}", relative_path, e);
-                errors += 1;
+        to_upload.push((
+            relative_path.clone(),
+            encrypted,
+            FileEntry { size, mtime_secs, mtime_nanos, hash },
+        ));
+    }
+
+    println!(
+        "Uploading {}/{} files via {} ({} unchanged) …",
+        to_upload.len(),
+        files.len(),
+        effective_backend,
+        skipped_fast + skipped_hash,
+    );
+
+    // ── Phase 2: Parallel uploads ──────────────────────────────────────────
+    //
+    // All queued uploads run concurrently inside a single tokio runtime block.
+    // A semaphore caps at 8 simultaneous in-flight requests — enough to fill
+    // a TCP connection pipeline without overwhelming the remote or exhausting
+    // local sockets.  (rclone defaults to --transfers=4; 8 is safe for S3
+    // and OneDrive which both handle high concurrency well.)
+    //
+    // The backend Arc is required because the trait object must be shared
+    // across spawn()ed tasks.  SyncBackend is already Send+Sync.
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut success = 0usize;
+
+    if !to_upload.is_empty() {
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+        use tokio::task::JoinSet;
+
+        let backend: Arc<dyn SyncBackend> = Arc::from(backend);
+        let sem = Arc::new(Semaphore::new(8));
+        let mut join_set: JoinSet<(String, FileEntry, Result<(), engram_sync::SyncError>)> =
+            JoinSet::new();
+
+        for (path, data, entry) in to_upload {
+            let backend = Arc::clone(&backend);
+            let sem = Arc::clone(&sem);
+            let path: String = path; // ensure owned String, not str
+            join_set.spawn(async move {
+                let _permit = sem.acquire().await.expect("semaphore closed");
+                let result = backend.push(&path, data).await;
+                (path, entry, result)
+            });
+        }
+
+        while let Some(join_result) = runtime.block_on(join_set.join_next()) {
+            match join_result {
+                Ok((path, entry, Ok(()))) => {
+                    manifest.mark_synced(path, entry);
+                    success += 1;
+                }
+                Ok((path, _, Err(e))) => {
+                    eprintln!("  ✗ {}: {}", path, e);
+                    errors += 1;
+                }
+                Err(e) => {
+                    eprintln!("  ✗ task panicked: {}", e);
+                    errors += 1;
+                }
             }
         }
     }
 
+    // Persist manifest — even on partial failure, successfully pushed files
+    // are recorded so the next run doesn't re-upload them.
+    if let Err(e) = manifest.save(&vault_name) {
+        eprintln!("Warning: failed to save sync manifest: {}", e);
+    }
+
     println!("{}", "─".repeat(41));
-    println!("Pushed:  {} files", success);
+    println!("Pushed:   {} files", success);
+    println!("Skipped:  {} unchanged", skipped_fast + skipped_hash);
     if errors > 0 {
-        eprintln!("Errors:  {} files", errors);
+        eprintln!("Errors:   {} files", errors);
         std::process::exit(1);
     }
 }

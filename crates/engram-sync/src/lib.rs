@@ -1,6 +1,7 @@
 // crates/engram-sync/src/lib.rs
 
 pub mod auth;
+pub mod manifest;
 pub mod azure;
 pub mod backend;
 pub mod encrypt;
