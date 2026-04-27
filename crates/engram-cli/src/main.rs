@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
-use engram_core::config::{CredentialsConfig, EngramConfig, SyncMode, VaultAccess, VaultEntry, VaultSyncCredentials};
+use engram_core::config::{EngramConfig, SyncMode, VaultAccess, VaultEntry, VaultSyncCredentials};
 use engram_core::{store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
