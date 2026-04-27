@@ -28,18 +28,6 @@ pub struct OneDriveBackend {
     folder: String, // e.g. "/Apps/Engram/vault"
 }
 
-/// Build the URL-encoded body for an OAuth 2.0 refresh-token grant.
-///
-/// Microsoft refresh tokens are opaque base64url strings (A-Za-z0-9-_.) —
-/// all characters are safe in application/x-www-form-urlencoded without
-/// additional percent-encoding.
-fn build_token_refresh_body(refresh_token: &str) -> String {
-    format!(
-        "client_id={}&refresh_token={}&grant_type=refresh_token\
-         &scope=Files.ReadWrite.All+offline_access",
-        ONEDRIVE_CLIENT_ID, refresh_token
-    )
-}
 
 impl OneDriveBackend {
     /// Create a backend with only an access token (no auto-refresh on 401).
@@ -101,17 +89,24 @@ impl OneDriveBackend {
             })?
         };
 
-        // Phase 2: async network call — no lock held.
-        let body = build_token_refresh_body(&refresh_token);
+        // Phase 2: async POST — no lock held.
         let resp: serde_json::Value = self
             .client
             .post(MICROSOFT_TOKEN_URL)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body(body)
+            .form(&[
+                ("client_id", ONEDRIVE_CLIENT_ID),
+                ("refresh_token", &*refresh_token),
+                ("grant_type", "refresh_token"),
+                ("scope", "Files.ReadWrite.All offline_access"),
+            ])
             .send()
-            .await?
+            .await
+            .map_err(SyncError::Network)?
+            .error_for_status()
+            .map_err(|e| SyncError::Auth(format!("token endpoint error: {e}")))?
             .json()
-            .await?;
+            .await
+            .map_err(SyncError::Network)?;
 
         let new_token = resp["access_token"]
             .as_str()
@@ -219,6 +214,19 @@ impl SyncBackend for OneDriveBackend {
             .header("Authorization", self.auth_header())
             .send()
             .await?;
+
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            self.client
+                .get(&url)
+                .header("Authorization", self.auth_header())
+                .send()
+                .await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() {
             return Err(SyncError::Backend(format!(
                 "OneDrive list failed: {}",
@@ -247,6 +255,19 @@ impl SyncBackend for OneDriveBackend {
             .header("Authorization", self.auth_header())
             .send()
             .await?;
+
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            self.client
+                .delete(&url)
+                .header("Authorization", self.auth_header())
+                .send()
+                .await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
             return Err(SyncError::Backend(format!(
                 "OneDrive delete failed: {}",
@@ -274,10 +295,13 @@ mod refresh_tests {
     }
 
     #[test]
-    fn build_refresh_request_body() {
-        let body = build_token_refresh_body("test-refresh-token");
-        assert!(body.contains("grant_type=refresh_token"));
-        assert!(body.contains("refresh_token=test-refresh-token"));
+    fn refresh_request_uses_correct_constants() {
+        // Verify the constants that build the token refresh request are correct.
+        assert_eq!(
+            MICROSOFT_TOKEN_URL,
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        );
+        assert!(!ONEDRIVE_CLIENT_ID.is_empty(), "client_id must be set");
     }
 }
 
