@@ -154,10 +154,20 @@ pub struct BiSyncState {
 
 impl BiSyncState {
     pub fn load(state_path: &std::path::Path) -> Self {
-        std::fs::read_to_string(state_path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        match std::fs::read_to_string(state_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => {
+                eprintln!("engram: bisync-state unreadable at {}, starting fresh: {e}", state_path.display());
+                Self::default()
+            }
+            Ok(s) => match serde_json::from_str(&s) {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!("engram: bisync-state corrupt at {}, starting fresh (backup recommended): {e}", state_path.display());
+                    Self::default()
+                }
+            },
+        }
     }
 
     pub fn save(&self, state_path: &std::path::Path) -> std::io::Result<()> {
@@ -171,13 +181,13 @@ impl BiSyncState {
 }
 
 /// What changed for a single file during bisync classification.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileChange {
     pub path: String,
     pub kind: ChangeKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChangeKind {
     LocalOnly,
     RemoteOnly,
@@ -225,12 +235,13 @@ pub fn classify_changes(
             (false, None, Some(_), _, _) => ChangeKind::NewRemote,
             (true, None, Some(_), _, _) => ChangeKind::DeletedLocally,
             (true, Some(_), None, _, _) => ChangeKind::DeletedRemotely,
-            (_, Some(l), Some(_), true, true) => ChangeKind::Conflict {
+            (_, Some(l), Some(r), true, true) => ChangeKind::Conflict {
                 local_mtime: l.mtime_secs,
-                remote_mtime: remote.get(path).map(|r| r.mtime_secs).unwrap_or(0),
+                remote_mtime: r.mtime_secs,
             },
             (_, _, _, true, false) => ChangeKind::LocalOnly,
             (_, _, _, false, true) => ChangeKind::RemoteOnly,
+            // Both sides unchanged, or both sides deleted — nothing to do
             _ => continue,
         };
 
