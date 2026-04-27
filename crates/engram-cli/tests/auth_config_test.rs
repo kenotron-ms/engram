@@ -1,14 +1,14 @@
-// Integration tests for `engram auth add` — config-based credential storage
+// Integration tests for `engram auth add` — credentials-file-based credential storage
 //
-// These tests verify that `engram auth add s3` writes credentials to config.toml
-// instead of the OS keychain, and that the --vault flag is supported.
+// These tests verify that `engram auth add s3` writes credentials to the credentials
+// file instead of config.toml, and that the --vault flag is supported.
 
 use assert_cmd::Command;
 use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+// ── helpers ──────────────────────────────────────────────────────────────────────
 
 /// Write a minimal config.toml with one vault entry at `<dir>/config.toml`.
 /// Returns the config path string.
@@ -36,19 +36,25 @@ fn write_empty_config(dir: &Path) -> String {
     config_path.to_string_lossy().to_string()
 }
 
-// ── tests ────────────────────────────────────────────────────────────────────
+/// Return the credentials file path for the given temp dir.
+fn credentials_path(dir: &Path) -> String {
+    dir.join("credentials").to_string_lossy().to_string()
+}
 
-/// `engram auth add s3 --vault <name>` must write credentials to config.toml.
+// ── tests ────────────────────────────────────────────────────────────────────────────
+
+/// `engram auth add s3 --vault <name>` must write credentials to the credentials
+/// file, NOT to config.toml.
 /// After running the command:
-///  - the config must contain backend = "s3"
-///  - the config must contain the access_key value
-///  - the config must contain the endpoint value
+///  - config.toml must NOT contain backend or AKID1234
+///  - credentials file MUST contain backend = "s3" and AKID1234
 #[test]
-fn test_auth_add_s3_writes_to_config() {
+fn test_auth_add_s3_writes_to_credentials_not_config() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("vault");
     fs::create_dir_all(&vault_path).unwrap();
     let config_path = write_config_with_vault(dir.path(), "myvault", &vault_path.to_string_lossy());
+    let creds_path = credentials_path(dir.path());
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args([
@@ -67,33 +73,45 @@ fn test_auth_add_s3_writes_to_config() {
         "secretkey5678",
     ])
     .env("ENGRAM_CONFIG_PATH", &config_path)
+    .env("ENGRAM_CREDENTIALS_PATH", &creds_path)
     .env_remove("ENGRAM_VAULT_KEY")
     .env_remove("ENGRAM_VAULT_PASSPHRASE");
 
     cmd.assert().success();
 
-    // Read the updated config and verify credentials were written.
-    let contents = fs::read_to_string(&config_path).expect("failed to read config.toml");
+    // config.toml must NOT contain credentials.
+    let config_contents = fs::read_to_string(&config_path).expect("failed to read config.toml");
+    assert!(
+        !config_contents.contains("AKID1234"),
+        "config.toml must NOT contain the access_key 'AKID1234', got:\n{config_contents}"
+    );
+    assert!(
+        !config_contents.contains("backend"),
+        "config.toml must NOT contain 'backend', got:\n{config_contents}"
+    );
 
+    // credentials file MUST contain credentials.
+    let creds_contents =
+        fs::read_to_string(&creds_path).expect("failed to read credentials file");
     assert!(
-        contents.contains("backend = \"s3\"") || contents.contains("backend = 's3'"),
-        "config.toml must contain backend = \"s3\", got:\n{contents}"
+        creds_contents.contains("backend = \"s3\"") || creds_contents.contains("backend = 's3'"),
+        "credentials file must contain backend = \"s3\", got:\n{creds_contents}"
     );
     assert!(
-        contents.contains("AKID1234"),
-        "config.toml must contain the access_key 'AKID1234', got:\n{contents}"
+        creds_contents.contains("AKID1234"),
+        "credentials file must contain the access_key 'AKID1234', got:\n{creds_contents}"
     );
     assert!(
-        contents.contains("s3.example.com"),
-        "config.toml must contain the endpoint 's3.example.com', got:\n{contents}"
+        creds_contents.contains("s3.example.com"),
+        "credentials file must contain the endpoint 's3.example.com', got:\n{creds_contents}"
     );
     assert!(
-        contents.contains("test-bucket"),
-        "config.toml must contain the bucket 'test-bucket', got:\n{contents}"
+        creds_contents.contains("test-bucket"),
+        "credentials file must contain the bucket 'test-bucket', got:\n{creds_contents}"
     );
 }
 
-/// After `engram auth add s3`, the config file must have mode 0600.
+/// After `engram auth add s3`, the credentials file must have mode 0600.
 #[test]
 #[cfg(unix)]
 fn test_auth_add_s3_sets_0600_permissions() {
@@ -103,6 +121,7 @@ fn test_auth_add_s3_sets_0600_permissions() {
     let vault_path = dir.path().join("vault");
     fs::create_dir_all(&vault_path).unwrap();
     let config_path = write_config_with_vault(dir.path(), "myvault", &vault_path.to_string_lossy());
+    let creds_path = credentials_path(dir.path());
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args([
@@ -121,16 +140,17 @@ fn test_auth_add_s3_sets_0600_permissions() {
         "secretkey5678",
     ])
     .env("ENGRAM_CONFIG_PATH", &config_path)
+    .env("ENGRAM_CREDENTIALS_PATH", &creds_path)
     .env_remove("ENGRAM_VAULT_KEY")
     .env_remove("ENGRAM_VAULT_PASSPHRASE");
 
     cmd.assert().success();
 
-    let meta = fs::metadata(&config_path).expect("failed to stat config.toml");
+    let meta = fs::metadata(&creds_path).expect("failed to stat credentials file");
     let mode = meta.permissions().mode() & 0o777;
     assert_eq!(
         mode, 0o600,
-        "config.toml must have permissions 0600 after auth add, got {mode:04o}"
+        "credentials file must have permissions 0600 after auth add, got {mode:04o}"
     );
 }
 
@@ -140,6 +160,7 @@ fn test_auth_add_s3_sets_0600_permissions() {
 fn test_auth_add_s3_fails_for_unknown_vault() {
     let dir = TempDir::new().unwrap();
     let config_path = write_empty_config(dir.path());
+    let creds_path = credentials_path(dir.path());
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args([
@@ -158,6 +179,7 @@ fn test_auth_add_s3_fails_for_unknown_vault() {
         "secretkey5678",
     ])
     .env("ENGRAM_CONFIG_PATH", &config_path)
+    .env("ENGRAM_CREDENTIALS_PATH", &creds_path)
     .env_remove("ENGRAM_VAULT_KEY")
     .env_remove("ENGRAM_VAULT_PASSPHRASE");
 

@@ -130,13 +130,14 @@ fn test_vault_add_headless() {
 /// to panic with a `Keyring` error in CI / headless environments.  After the
 /// fix the command must:
 ///   - exit 0
-///   - write credentials to config.toml (not the OS keychain)
+///   - write credentials to the credentials file (not config.toml, not the OS keychain)
 ///   - produce NO output that mentions "Keyring", "keyring", or
 ///     "SecKeychainFind" (the OS-level keychain API)
 #[test]
 fn test_auth_add_s3_headless_does_not_panic() {
     let dir = TempDir::new().unwrap();
     let config_path = dir.path().join("config.toml").to_string_lossy().to_string();
+    let creds_path = dir.path().join("credentials").to_string_lossy().to_string();
 
     let vault_path = dir.path().join("myvault");
     fs::create_dir_all(&vault_path).unwrap();
@@ -162,6 +163,7 @@ fn test_auth_add_s3_headless_does_not_panic() {
 
     // Step 3 — auth add s3 (the previously-panicking command).
     let output = engram(&config_path)
+        .env("ENGRAM_CREDENTIALS_PATH", &creds_path)
         .args([
             "auth",
             "add",
@@ -212,20 +214,20 @@ fn test_auth_add_s3_headless_does_not_panic() {
         stdout
     );
 
-    // Credentials must have been written to config.toml (not the keychain).
-    let config_contents = fs::read_to_string(&config_path).expect("failed to read config.toml");
+    // Credentials must have been written to the credentials file (not config.toml).
+    let creds_contents = fs::read_to_string(&creds_path).expect("failed to read credentials file");
 
     assert!(
-        config_contents.contains("AKID1234"),
-        "config.toml must contain the access_key 'AKID1234', got:\n{config_contents}"
+        creds_contents.contains("AKID1234"),
+        "credentials file must contain the access_key 'AKID1234', got:\n{creds_contents}"
     );
     assert!(
-        config_contents.contains("s3.example.com"),
-        "config.toml must contain the endpoint 's3.example.com', got:\n{config_contents}"
+        creds_contents.contains("s3.example.com"),
+        "credentials file must contain the endpoint 's3.example.com', got:\n{creds_contents}"
     );
     assert!(
-        config_contents.contains("test-bucket"),
-        "config.toml must contain the bucket 'test-bucket', got:\n{config_contents}"
+        creds_contents.contains("test-bucket"),
+        "credentials file must contain the bucket 'test-bucket', got:\n{creds_contents}"
     );
 }
 

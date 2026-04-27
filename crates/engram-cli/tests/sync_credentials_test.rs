@@ -1,8 +1,8 @@
-// Integration tests for sync credential lookup from config.toml
+// Integration tests for sync credential lookup from credentials file
 //
-// These tests verify that `engram sync` reads credentials from config.toml
-// (not from the OS keychain), and exits cleanly with a helpful message when
-// no sync backend is configured.
+// These tests verify that `engram sync` reads credentials from the credentials
+// file (not from config.toml or the OS keychain), and exits cleanly with a
+// helpful message when no sync backend is configured.
 
 use assert_cmd::Command;
 use std::fs;
@@ -26,11 +26,11 @@ const DUMMY_VAULT_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
-/// A vault with no `[vaults.<name>.sync]` block must exit with a helpful error
-/// message — NOT panic with a keychain/keyring error.
+/// A vault with no credentials in the credentials file must exit with a helpful
+/// error message — NOT panic with a keychain/keyring error.
 ///
 /// Acceptable messages (any one must appear in stderr or stdout):
-///   - "No sync backend"   – produced when config has no sync credentials
+///   - "No sync backend"   – produced when credentials file has no entry for the vault
 ///   - "engram auth add"   – produced as a hint for the user
 ///   - "not initialized"   – produced if the vault key setup is missing
 #[test]
@@ -50,10 +50,13 @@ default = true
         vault_dir.to_string_lossy()
     );
     let config_path = write_config(dir.path(), &toml);
+    // Point credentials path to a non-existent file so no backend is found.
+    let creds_path = dir.path().join("credentials").to_string_lossy().to_string();
 
     let mut cmd = Command::cargo_bin("engram").unwrap();
     cmd.args(["sync", "--vault", "myvault"])
         .env("ENGRAM_CONFIG_PATH", &config_path)
+        .env("ENGRAM_CREDENTIALS_PATH", &creds_path)
         // Provide a valid vault key so we bypass the key-derivation step and
         // reach the sync-credentials check.
         .env("ENGRAM_VAULT_KEY", DUMMY_VAULT_KEY)

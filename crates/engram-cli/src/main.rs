@@ -11,7 +11,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use clap::{Parser, Subcommand, ValueEnum};
 use directories::UserDirs;
-use engram_core::config::{EngramConfig, SyncCredentials, SyncMode, VaultAccess, VaultEntry};
+use engram_core::config::{CredentialsConfig, EngramConfig, SyncMode, VaultAccess, VaultEntry, VaultSyncCredentials};
 use engram_core::{store::MemoryStore, vault::Vault};
 use engram_search::indexer::TantivyIndexer;
 use engram_search::{SearchResult, SearchSource};
@@ -467,33 +467,37 @@ fn run_auth_add_s3(
         });
 
     let vault_name = resolve_auth_vault_name(vault_arg);
-    let mut config = EngramConfig::load();
+    let config = EngramConfig::load();
 
-    match config.vaults.get_mut(&vault_name) {
-        None => {
-            eprintln!("Vault '{}' not found in config.", vault_name);
-            std::process::exit(1);
-        }
-        Some(vault) => {
-            vault.sync = Some(SyncCredentials {
-                backend: "s3".to_string(),
-                endpoint: Some(endpoint.to_string()),
-                bucket: Some(bucket.to_string()),
-                access_key: Some(ak),
-                secret_key: Some(sk),
-                ..Default::default()
-            });
-        }
-    }
-
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // Verify vault exists in config.
+    if config.vaults.get(&vault_name).is_none() {
+        eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
 
+    let mut creds = EngramConfig::load_credentials();
+    creds.vaults.insert(
+        vault_name.clone(),
+        VaultSyncCredentials {
+            backend: "s3".to_string(),
+            endpoint: Some(endpoint.to_string()),
+            bucket: Some(bucket.to_string()),
+            access_key: Some(ak),
+            secret_key: Some(sk),
+            ..Default::default()
+        },
+    );
+
+    if let Err(e) = EngramConfig::save_credentials(&creds) {
+        eprintln!("Failed to save credentials: {}", e);
+        std::process::exit(1);
+    }
+
+    let creds_path = EngramConfig::credentials_path();
     println!("\u{2713} S3 backend configured for vault '{}'", vault_name);
-    println!("  Endpoint: {}", endpoint);
-    println!("  Bucket:   {}", bucket);
+    println!("  Endpoint:    {}", endpoint);
+    println!("  Bucket:      {}", bucket);
+    println!("  Credentials: {}", creds_path.display());
 }
 
 fn run_auth_add_onedrive(folder: &str) {
@@ -543,36 +547,40 @@ fn run_auth_add_onedrive(folder: &str) {
     let refresh_token = json["refresh_token"].as_str().unwrap_or("").to_string();
     let access_token = access_token.to_string();
 
-    // Resolve the default vault and write credentials to config.
+    // Resolve the default vault and write credentials to credentials file.
     let vault_name = resolve_auth_vault_name("");
-    let mut config = EngramConfig::load();
+    let config = EngramConfig::load();
 
-    match config.vaults.get_mut(&vault_name) {
-        None => {
-            eprintln!("Vault '{}' not found in config.", vault_name);
-            std::process::exit(1);
-        }
-        Some(vault) => {
-            vault.sync = Some(SyncCredentials {
-                backend: "onedrive".to_string(),
-                access_token: Some(access_token),
-                refresh_token: Some(refresh_token),
-                folder: Some(folder.to_string()),
-                ..Default::default()
-            });
-        }
-    }
-
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // Verify vault exists in config.
+    if config.vaults.get(&vault_name).is_none() {
+        eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
 
+    let mut creds = EngramConfig::load_credentials();
+    creds.vaults.insert(
+        vault_name.clone(),
+        VaultSyncCredentials {
+            backend: "onedrive".to_string(),
+            access_token: Some(access_token),
+            refresh_token: Some(refresh_token),
+            folder: Some(folder.to_string()),
+            ..Default::default()
+        },
+    );
+
+    if let Err(e) = EngramConfig::save_credentials(&creds) {
+        eprintln!("Failed to save credentials: {}", e);
+        std::process::exit(1);
+    }
+
+    let creds_path = EngramConfig::credentials_path();
     println!(
         "\u{2713} OneDrive backend configured for vault '{}'",
         vault_name
     );
-    println!("  Folder: {}", folder);
+    println!("  Folder:      {}", folder);
+    println!("  Credentials: {}", creds_path.display());
 }
 
 fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
@@ -589,69 +597,78 @@ fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
     };
 
     let vault_name = resolve_auth_vault_name(vault_arg);
-    let mut config = EngramConfig::load();
+    let config = EngramConfig::load();
 
-    match config.vaults.get_mut(&vault_name) {
-        None => {
-            eprintln!("Vault '{}' not found in config.", vault_name);
-            std::process::exit(1);
-        }
-        Some(vault) => {
-            vault.sync = Some(SyncCredentials {
-                backend: "azure".to_string(),
-                account: Some(account.to_string()),
-                container: Some(container.to_string()),
-                access_key: Some(ak),
-                ..Default::default()
-            });
-        }
-    }
-
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // Verify vault exists in config.
+    if config.vaults.get(&vault_name).is_none() {
+        eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
 
+    let mut creds = EngramConfig::load_credentials();
+    creds.vaults.insert(
+        vault_name.clone(),
+        VaultSyncCredentials {
+            backend: "azure".to_string(),
+            account: Some(account.to_string()),
+            container: Some(container.to_string()),
+            access_key: Some(ak),
+            ..Default::default()
+        },
+    );
+
+    if let Err(e) = EngramConfig::save_credentials(&creds) {
+        eprintln!("Failed to save credentials: {}", e);
+        std::process::exit(1);
+    }
+
+    let creds_path = EngramConfig::credentials_path();
     println!(
         "\u{2713} Azure backend configured for vault '{}'",
         vault_name
     );
-    println!("  Account:   {}", account);
-    println!("  Container: {}", container);
+    println!("  Account:     {}", account);
+    println!("  Container:   {}", container);
+    println!("  Credentials: {}", creds_path.display());
 }
 
 fn run_auth_add_gdrive(vault_arg: &str, bucket: &str, key_file: &str) {
     let vault_name = resolve_auth_vault_name(vault_arg);
-    let mut config = EngramConfig::load();
+    let config = EngramConfig::load();
 
-    match config.vaults.get_mut(&vault_name) {
-        None => {
-            eprintln!("Vault '{}' not found in config.", vault_name);
-            std::process::exit(1);
-        }
-        Some(vault) => {
-            vault.sync = Some(SyncCredentials {
-                backend: "gcs".to_string(),
-                bucket: Some(bucket.to_string()),
-                // Reuse access_key field for the key file path.
-                access_key: Some(key_file.to_string()),
-                ..Default::default()
-            });
-        }
-    }
-
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // Verify vault exists in config.
+    if config.vaults.get(&vault_name).is_none() {
+        eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
 
+    let mut creds = EngramConfig::load_credentials();
+    creds.vaults.insert(
+        vault_name.clone(),
+        VaultSyncCredentials {
+            backend: "gcs".to_string(),
+            bucket: Some(bucket.to_string()),
+            // Reuse access_key field for the key file path.
+            access_key: Some(key_file.to_string()),
+            ..Default::default()
+        },
+    );
+
+    if let Err(e) = EngramConfig::save_credentials(&creds) {
+        eprintln!("Failed to save credentials: {}", e);
+        std::process::exit(1);
+    }
+
+    let creds_path = EngramConfig::credentials_path();
     println!("\u{2713} GCS backend configured for vault '{}'", vault_name);
-    println!("  Bucket:   {}", bucket);
-    println!("  Key file: {}", key_file);
+    println!("  Bucket:      {}", bucket);
+    println!("  Key file:    {}", key_file);
+    println!("  Credentials: {}", creds_path.display());
 }
 
 fn run_auth_list() {
     let config = EngramConfig::load();
+    let creds = EngramConfig::load_credentials();
 
     println!("{}", "─".repeat(41));
     println!("Vault sync backends:");
@@ -666,8 +683,8 @@ fn run_auth_list() {
     }
 
     let mut any_configured = false;
-    for (vault_name, vault_entry) in &config.vaults {
-        if let Some(sync) = &vault_entry.sync {
+    for vault_name in config.vaults.keys() {
+        if let Some(sync) = EngramConfig::credentials_for_vault(vault_name, &creds) {
             let details = match sync.backend.as_str() {
                 "s3" => {
                     let endpoint = sync.endpoint.as_deref().unwrap_or("(none)");
@@ -689,10 +706,10 @@ fn run_auth_list() {
                 }
                 other => format!("backend={}", other),
             };
-            println!("  ✓ {} — {} ({})", vault_name, sync.backend, details);
+            println!("  \u{2713} {} \u{2014} {} ({})", vault_name, sync.backend, details);
             any_configured = true;
         } else {
-            println!("  · {} — no sync configured", vault_name);
+            println!("  \u{00b7} {} \u{2014} no sync configured", vault_name);
         }
     }
 
@@ -701,31 +718,32 @@ fn run_auth_list() {
         println!("  Run: engram auth add s3|onedrive|azure|gdrive --vault <name>");
     }
     println!();
+    let creds_path = EngramConfig::credentials_path();
+    println!("  Credentials file: {}", creds_path.display());
+    println!();
 }
 
 fn run_auth_remove(vault_name: &str) {
-    let mut config = EngramConfig::load();
-
-    match config.vaults.get_mut(vault_name) {
-        None => {
-            eprintln!("Vault '{}' not found in config.", vault_name);
-            std::process::exit(1);
-        }
-        Some(vault) => {
-            if vault.sync.is_none() {
-                println!("No sync credentials configured for vault '{}'", vault_name);
-                return;
-            }
-            vault.sync = None;
-        }
-    }
-
-    if let Err(e) = config.save() {
-        eprintln!("Failed to save config: {}", e);
+    // Verify vault exists in config (graceful error if not registered).
+    let config = EngramConfig::load();
+    if config.vaults.get(vault_name).is_none() {
+        eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
 
-    println!("✓ Removed sync credentials for vault '{}'", vault_name);
+    let mut creds = EngramConfig::load_credentials();
+
+    if creds.vaults.remove(vault_name).is_none() {
+        println!("No sync credentials configured for vault '{}'", vault_name);
+        return;
+    }
+
+    if let Err(e) = EngramConfig::save_credentials(&creds) {
+        eprintln!("Failed to save credentials: {}", e);
+        std::process::exit(1);
+    }
+
+    println!("\u{2713} Removed sync credentials for vault '{}'", vault_name);
 }
 
 /// Show a formatted git status summary for the vault directory.
@@ -821,8 +839,9 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         }
     };
 
-    // Determine which backend to use from config credentials.
-    let creds = config.get_vault(&vault_name).and_then(|v| v.sync.as_ref());
+    // Determine which backend to use from credentials file.
+    let all_creds = EngramConfig::load_credentials();
+    let creds = EngramConfig::credentials_for_vault(&vault_name, &all_creds);
 
     let creds = match creds {
         Some(c) => c,
@@ -1915,7 +1934,6 @@ fn run_vault_add(
         sync_mode: sync,
         default,
         vault_type: vault_type.map(|s| s.to_string()),
-        sync: None,
     };
     config.add_vault(name.to_string(), entry);
     if let Err(e) = config.save() {
