@@ -161,14 +161,14 @@ enum VaultCommands {
 
 #[derive(Subcommand)]
 enum AuthCommands {
-    /// Configure a sync backend (stores credentials in config.toml)
+    /// Configure a sync backend (stores credentials in the credentials file)
     Add {
         #[command(subcommand)]
         backend: BackendCommands,
     },
     /// List configured sync backends
     List,
-    /// Remove sync credentials for a vault from config.toml
+    /// Remove sync credentials for a vault from the credentials file
     Remove { vault: String },
 }
 
