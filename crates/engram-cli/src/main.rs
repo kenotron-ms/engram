@@ -2628,10 +2628,13 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
         std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+        // Prevent Tier 2 from picking up a real ~/.engram/sync.key on developer machines.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = resolve_vault_key();
 
         std::env::remove_var("ENGRAM_CONFIG_PATH");
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert!(result.is_err(), "should fail when not initialized");
         let err_msg = result.unwrap_err();
@@ -2715,8 +2718,12 @@ mod tests {
         };
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        // Prevent sync.key on developer machines from masking the salt-configured tier.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = doctor_key_method(&config);
+
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert_eq!(
             result, "passphrase prompt (salt configured) \u{2713}",
@@ -2731,8 +2738,12 @@ mod tests {
         let config = EngramConfig::default();
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        // Prevent sync.key on developer machines from masking the not-initialized tier.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = doctor_key_method(&config);
+
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert_eq!(
             result, "not initialized \u{2717} \u{2014} run: engram init",

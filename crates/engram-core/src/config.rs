@@ -292,7 +292,14 @@ impl EngramConfig {
 
 /// Path to the sync key file — the engram equivalent of ~/.ssh/id_rsa.
 /// Contains base64-encoded 32 raw key bytes, chmod 600.
+///
+/// Checks `ENGRAM_SYNC_KEY_PATH` first; falls back to `~/.engram/sync.key`.
+/// The env var override prevents tests from accidentally reading the
+/// developer's real key file.
 pub fn sync_key_path() -> std::path::PathBuf {
+    if let Ok(override_path) = std::env::var("ENGRAM_SYNC_KEY_PATH") {
+        return std::path::PathBuf::from(override_path);
+    }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
         .join(".engram")
@@ -875,6 +882,30 @@ default = false
 mod sync_key_tests {
     use super::*;
     use tempfile::TempDir;
+
+    // Serialise tests that mutate ENGRAM_SYNC_KEY_PATH in the process environment.
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    /// ENGRAM_SYNC_KEY_PATH env var must override the default ~/.engram/sync.key path.
+    #[test]
+    fn sync_key_path_respects_env_var_override() {
+        let _guard = env_lock();
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/tmp/engram-test-override.key");
+        let path = sync_key_path();
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/tmp/engram-test-override.key"),
+            "sync_key_path() should respect ENGRAM_SYNC_KEY_PATH env var override"
+        );
+    }
 
     #[test]
     fn write_then_read_key_file_roundtrips() {
