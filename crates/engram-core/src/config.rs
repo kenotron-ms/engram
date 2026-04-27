@@ -283,28 +283,24 @@ impl EngramConfig {
         }
         true
     }
+
+    /// Path to the sync key file — the engram equivalent of ~/.ssh/id_rsa.
+    /// Override with ENGRAM_SYNC_KEY_PATH env var (useful for testing).
+    pub fn sync_key_path() -> std::path::PathBuf {
+        if let Ok(override_path) = std::env::var("ENGRAM_SYNC_KEY_PATH") {
+            return std::path::PathBuf::from(override_path);
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".engram")
+            .join("sync.key")
+    }
 }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sync key file helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Path to the sync key file — the engram equivalent of ~/.ssh/id_rsa.
-/// Contains base64-encoded 32 raw key bytes, chmod 600.
-///
-/// Checks `ENGRAM_SYNC_KEY_PATH` first; falls back to `~/.engram/sync.key`.
-/// The env var override prevents tests from accidentally reading the
-/// developer's real key file.
-pub fn sync_key_path() -> std::path::PathBuf {
-    if let Ok(override_path) = std::env::var("ENGRAM_SYNC_KEY_PATH") {
-        return std::path::PathBuf::from(override_path);
-    }
-    dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".engram")
-        .join("sync.key")
-}
 
 /// Write a 32-byte sync key to disk as base64, chmod 600.
 ///
@@ -348,18 +344,13 @@ pub fn write_sync_key_file(
 /// Returns an error if the file is missing, corrupt, or not exactly 32 bytes.
 pub fn read_sync_key_file(
     path: &std::path::Path,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<[u8; 32], Box<dyn std::error::Error + Send + Sync>> {
     use base64::Engine;
     let contents = std::fs::read_to_string(path)?;
     let decoded = base64::engine::general_purpose::STANDARD.decode(contents.trim())?;
-    if decoded.len() != 32 {
-        return Err(format!(
-            "sync.key: expected 32 bytes, got {} — file may be corrupt",
-            decoded.len()
-        )
-        .into());
-    }
-    Ok(decoded)
+    decoded
+        .try_into()
+        .map_err(|_| "sync.key: expected 32 bytes — file may be corrupt".into())
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -898,12 +889,12 @@ mod sync_key_tests {
     fn sync_key_path_respects_env_var_override() {
         let _guard = env_lock();
         std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/tmp/engram-test-override.key");
-        let path = sync_key_path();
+        let path = EngramConfig::sync_key_path();
         std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
         assert_eq!(
             path,
             std::path::PathBuf::from("/tmp/engram-test-override.key"),
-            "sync_key_path() should respect ENGRAM_SYNC_KEY_PATH env var override"
+            "EngramConfig::sync_key_path() should respect ENGRAM_SYNC_KEY_PATH env var override"
         );
     }
 
@@ -914,9 +905,9 @@ mod sync_key_tests {
         let key: [u8; 32] = [0xAB; 32];
 
         write_sync_key_file(&key_path, &key).unwrap();
-        let loaded = read_sync_key_file(&key_path).unwrap();
+        let loaded: [u8; 32] = read_sync_key_file(&key_path).unwrap();
 
-        assert_eq!(key, loaded.as_slice());
+        assert_eq!(key, loaded);
     }
 
     #[test]

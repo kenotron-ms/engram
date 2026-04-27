@@ -330,19 +330,11 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
     }
 
     // ── Tier 2: ~/.engram/sync.key file ───────────────────────────────
-    let key_path = engram_core::config::sync_key_path();
+    let key_path = EngramConfig::sync_key_path();
     if key_path.exists() {
         match engram_core::config::read_sync_key_file(&key_path) {
-            Ok(key_bytes) => {
-                return key_bytes
-                    .try_into()
-                    .map(engram_core::crypto::EngramKey::from_bytes)
-                    .map_err(|_| "sync.key: corrupt — expected 32 bytes".to_string());
-            }
-            Err(e) => {
-                eprintln!("  ! sync.key exists but could not be read: {e}");
-                // Fall through to next tier
-            }
+            Ok(key) => return Ok(engram_core::crypto::EngramKey::from_bytes(key)),
+            Err(e) => eprintln!("  ! sync.key unreadable: {e}"),
         }
     }
 
@@ -369,22 +361,6 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         .map_err(|e| format!("Failed to read passphrase: {}", e))?;
     let key = engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
         .map_err(|e| format!("Key derivation failed: {}", e))?;
-
-    // Offer to save for future headless access (only if sync.key does not exist yet).
-    if !key_path.exists() {
-        eprint!(
-            "Save key to {} for passwordless access? [Y/n] ",
-            key_path.display()
-        );
-        let mut answer = String::new();
-        let _ = std::io::stdin().read_line(&mut answer);
-        if answer.trim().is_empty() || answer.trim().eq_ignore_ascii_case("y") {
-            match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
-                Ok(_) => eprintln!("  ✓ Key saved to {} (chmod 600)", key_path.display()),
-                Err(e) => eprintln!("  ! Could not save key: {e}"),
-            }
-        }
-    }
 
     Ok(key)
 }
@@ -1800,9 +1776,9 @@ fn run_install() {
     }
 
     // Write sync.key for headless daemon operation.
-    let key_path = engram_core::config::sync_key_path();
+    let key_path = EngramConfig::sync_key_path();
     if key_path.exists() {
-        println!("\u{2713} sync.key already exists at {}", key_path.display());
+        println!("\u{2713} sync.key already present at {}", key_path.display());
     } else {
         println!(
             "Setting up sync key (stored at {}, chmod 600)...",
@@ -1810,15 +1786,18 @@ fn run_install() {
         );
         match resolve_vault_key() {
             Ok(key) => {
-                match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
-                    Ok(_) => println!(
-                        "\u{2713} sync.key written \u{2014} daemon will start without passphrase prompt"
-                    ),
-                    Err(e) => eprintln!("  ! Could not write sync.key: {e}"),
+                // Only write if still absent (user may have created it via another path)
+                if !key_path.exists() {
+                    match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
+                        Ok(_) => println!(
+                            "\u{2713} sync.key written \u{2014} daemon starts without passphrase prompt"
+                        ),
+                        Err(e) => eprintln!("  ! Could not write sync.key: {e}"),
+                    }
                 }
             }
             Err(e) => eprintln!(
-                "  ! Could not derive key: {e} \u{2014} set ENGRAM_VAULT_KEY for headless operation"
+                "  ! Could not derive key: {e} \u{2014} set ENGRAM_VAULT_KEY for headless use"
             ),
         }
     }
@@ -1839,10 +1818,10 @@ fn run_uninstall() {
 fn doctor_key_method(config: &EngramConfig) -> String {
     if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
         "ENGRAM_VAULT_KEY env var \u{2713}".to_string()
-    } else if engram_core::config::sync_key_path().exists() {
+    } else if EngramConfig::sync_key_path().exists() {
         format!(
             "sync.key file ({}) \u{2713}",
-            engram_core::config::sync_key_path().display()
+            EngramConfig::sync_key_path().display()
         )
     } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
         "ENGRAM_VAULT_PASSPHRASE env var \u{2713}".to_string()
