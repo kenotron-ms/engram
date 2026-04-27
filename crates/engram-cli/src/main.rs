@@ -1035,34 +1035,48 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         use tokio::sync::Semaphore;
         use tokio::task::JoinSet;
 
-        let backend: Arc<dyn SyncBackend> = Arc::from(backend);
-        let sem = Arc::new(Semaphore::new(8));
-        let mut join_set: JoinSet<(String, FileEntry, Result<(), engram_sync::SyncError>)> =
-            JoinSet::new();
+        // spawn() requires an active tokio context, so the entire upload
+        // phase — spawning tasks AND collecting results — must live inside
+        // a single block_on() call.  We collect outcomes into a Vec and
+        // apply them to the manifest afterwards (manifest is !Send).
+        let outcomes: Vec<(String, FileEntry, Result<(), engram_sync::SyncError>)> =
+            runtime.block_on(async {
+                let backend: Arc<dyn SyncBackend> = Arc::from(backend);
+                let sem = Arc::new(Semaphore::new(8));
+                let mut join_set: JoinSet<(
+                    String,
+                    FileEntry,
+                    Result<(), engram_sync::SyncError>,
+                )> = JoinSet::new();
 
-        for (path, data, entry) in to_upload {
-            let backend = Arc::clone(&backend);
-            let sem = Arc::clone(&sem);
-            let path: String = path; // ensure owned String, not str
-            join_set.spawn(async move {
-                let _permit = sem.acquire().await.expect("semaphore closed");
-                let result = backend.push(&path, data).await;
-                (path, entry, result)
+                for (path, data, entry) in to_upload {
+                    let backend = Arc::clone(&backend);
+                    let sem = Arc::clone(&sem);
+                    join_set.spawn(async move {
+                        let _permit = sem.acquire().await.expect("semaphore closed");
+                        let result = backend.push(&path, data).await;
+                        (path, entry, result)
+                    });
+                }
+
+                let mut results = Vec::new();
+                while let Some(res) = join_set.join_next().await {
+                    results.push(res);
+                }
+                results
+                    .into_iter()
+                    .filter_map(|r| r.ok())
+                    .collect()
             });
-        }
 
-        while let Some(join_result) = runtime.block_on(join_set.join_next()) {
-            match join_result {
-                Ok((path, entry, Ok(()))) => {
+        for (path, entry, result) in outcomes {
+            match result {
+                Ok(()) => {
                     manifest.mark_synced(path, entry);
                     success += 1;
                 }
-                Ok((path, _, Err(e))) => {
-                    eprintln!("  ✗ {}: {}", path, e);
-                    errors += 1;
-                }
                 Err(e) => {
-                    eprintln!("  ✗ task panicked: {}", e);
+                    eprintln!("  ✗ {}: {}", path, e);
                     errors += 1;
                 }
             }
