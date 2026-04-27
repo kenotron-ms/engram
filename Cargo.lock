@@ -1167,6 +1167,7 @@ dependencies = [
  "engram-core",
  "engram-search",
  "engram-sync",
+ "libc",
  "notify",
  "open",
  "predicates",
