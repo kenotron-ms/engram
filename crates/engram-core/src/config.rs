@@ -626,7 +626,10 @@ default = false
 
         let _guard = env_lock();
         // Point at a path that definitely does not exist.
-        env::set_var("ENGRAM_CREDENTIALS_PATH", "/tmp/engram-nonexistent-creds-file-12345");
+        env::set_var(
+            "ENGRAM_CREDENTIALS_PATH",
+            "/tmp/engram-nonexistent-creds-file-12345",
+        );
 
         let creds = EngramConfig::load_credentials();
         assert!(
@@ -772,7 +775,10 @@ default = false
         let parsed: CredentialsConfig =
             toml::from_str(&toml_str).expect("deserialize CredentialsConfig");
 
-        let vault = parsed.vaults.get("work").expect("work vault missing after roundtrip");
+        let vault = parsed
+            .vaults
+            .get("work")
+            .expect("work vault missing after roundtrip");
         assert_eq!(vault.backend, "s3");
         assert_eq!(vault.access_key, Some("AKID123".to_string()));
     }

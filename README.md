@@ -41,7 +41,7 @@ engram awareness
 
 ```bash
 export ENGRAM_VAULT_PASSPHRASE="your-passphrase"        # remote servers / CI / Docker
-export ENGRAM_VAULT_KEY="$(engram init --print-key)"    # CI / automation
+export ENGRAM_VAULT_KEY="<base64-encoded-32-byte-key>"  # CI / automation (store in CI secrets)
 ```
 
 Run `engram doctor` to see which tier is active and get setup instructions.

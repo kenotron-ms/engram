@@ -91,8 +91,7 @@ fn test_auth_add_s3_writes_to_credentials_not_config() {
     );
 
     // credentials file MUST contain credentials.
-    let creds_contents =
-        fs::read_to_string(&creds_path).expect("failed to read credentials file");
+    let creds_contents = fs::read_to_string(&creds_path).expect("failed to read credentials file");
     assert!(
         creds_contents.contains("backend = \"s3\"") || creds_contents.contains("backend = 's3'"),
         "credentials file must contain backend = \"s3\", got:\n{creds_contents}"

@@ -348,7 +348,14 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(output) = std::process::Command::new("security")
-            .args(["find-generic-password", "-a", "engram", "-s", "engram-vault", "-w"])
+            .args([
+                "find-generic-password",
+                "-a",
+                "engram",
+                "-s",
+                "engram-vault",
+                "-w",
+            ])
             .output()
         {
             if output.status.success() {
@@ -735,7 +742,10 @@ fn run_auth_list() {
                 }
                 other => format!("backend={}", other),
             };
-            println!("  \u{2713} {} \u{2014} {} ({})", vault_name, sync.backend, details);
+            println!(
+                "  \u{2713} {} \u{2014} {} ({})",
+                vault_name, sync.backend, details
+            );
             any_configured = true;
         } else {
             println!("  \u{00b7} {} \u{2014} no sync configured", vault_name);
@@ -772,7 +782,10 @@ fn run_auth_remove(vault_name: &str) {
         std::process::exit(1);
     }
 
-    println!("\u{2713} Removed sync credentials for vault '{}'", vault_name);
+    println!(
+        "\u{2713} Removed sync credentials for vault '{}'",
+        vault_name
+    );
 }
 
 /// Show a formatted git status summary for the vault directory.
@@ -945,8 +958,8 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
 
     let mut manifest = SyncManifest::load(&vault_name);
     let mut to_upload: Vec<(String, engram_sync::Bytes, FileEntry)> = Vec::new();
-    let mut skipped_fast = 0usize;   // skipped by mtime+size (no file read)
-    let mut skipped_hash = 0usize;   // skipped by hash (content unchanged)
+    let mut skipped_fast = 0usize; // skipped by mtime+size (no file read)
+    let mut skipped_hash = 0usize; // skipped by hash (content unchanged)
     let mut errors = 0usize;
 
     for relative_path in &files {
@@ -1004,7 +1017,12 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         to_upload.push((
             relative_path.clone(),
             encrypted,
-            FileEntry { size, mtime_secs, mtime_nanos, hash },
+            FileEntry {
+                size,
+                mtime_secs,
+                mtime_nanos,
+                hash,
+            },
         ));
     }
 
@@ -1039,15 +1057,12 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         // phase — spawning tasks AND collecting results — must live inside
         // a single block_on() call.  We collect outcomes into a Vec and
         // apply them to the manifest afterwards (manifest is !Send).
-        let outcomes: Vec<(String, FileEntry, Result<(), engram_sync::SyncError>)> =
-            runtime.block_on(async {
+        let outcomes: Vec<(String, FileEntry, Result<(), engram_sync::SyncError>)> = runtime
+            .block_on(async {
                 let backend: Arc<dyn SyncBackend> = Arc::from(backend);
                 let sem = Arc::new(Semaphore::new(8));
-                let mut join_set: JoinSet<(
-                    String,
-                    FileEntry,
-                    Result<(), engram_sync::SyncError>,
-                )> = JoinSet::new();
+                let mut join_set: JoinSet<(String, FileEntry, Result<(), engram_sync::SyncError>)> =
+                    JoinSet::new();
 
                 for (path, data, entry) in to_upload {
                     let backend = Arc::clone(&backend);
@@ -1063,10 +1078,7 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
                 while let Some(res) = join_set.join_next().await {
                     results.push(res);
                 }
-                results
-                    .into_iter()
-                    .filter_map(|r| r.ok())
-                    .collect()
+                results.into_iter().filter_map(|r| r.ok()).collect()
             });
 
         for (path, entry, result) in outcomes {
@@ -1810,7 +1822,6 @@ fn doctor_key_method(config: &EngramConfig, keychain_available: bool) -> String 
     }
 }
 
-
 /// Print diagnostic information about the engram installation.
 fn run_doctor() {
     // Load config once to avoid redundant filesystem reads across helpers.
@@ -1845,7 +1856,14 @@ fn run_doctor() {
     // ── Key method ─────────────────────────────────────────────────────────────
     #[cfg(target_os = "macos")]
     let keychain_available = std::process::Command::new("security")
-        .args(["find-generic-password", "-a", "engram", "-s", "engram-vault", "-w"])
+        .args([
+            "find-generic-password",
+            "-a",
+            "engram",
+            "-s",
+            "engram-vault",
+            "-w",
+        ])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
@@ -2667,8 +2685,7 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_KEY");
 
         assert_eq!(
-            result,
-            "ENGRAM_VAULT_KEY env var \u{2713}",
+            result, "ENGRAM_VAULT_KEY env var \u{2713}",
             "should return ENGRAM_VAULT_KEY label when env var is set"
         );
     }
@@ -2687,8 +2704,7 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
 
         assert_eq!(
-            result,
-            "ENGRAM_VAULT_PASSPHRASE env var \u{2713}",
+            result, "ENGRAM_VAULT_PASSPHRASE env var \u{2713}",
             "should return ENGRAM_VAULT_PASSPHRASE label when env var is set"
         );
     }
@@ -2705,8 +2721,7 @@ mod tests {
         let result = doctor_key_method(&config, true);
 
         assert_eq!(
-            result,
-            "macOS Keychain (security CLI) \u{2713}",
+            result, "macOS Keychain (security CLI) \u{2713}",
             "should return Keychain label when keychain_available is true"
         );
     }
@@ -2727,8 +2742,7 @@ mod tests {
         let result = doctor_key_method(&config, false);
 
         assert_eq!(
-            result,
-            "interactive passphrase prompt (salt configured) \u{2713}",
+            result, "interactive passphrase prompt (salt configured) \u{2713}",
             "should return interactive passphrase prompt label when salt is configured"
         );
     }
@@ -2745,12 +2759,10 @@ mod tests {
         let result = doctor_key_method(&config, false);
 
         assert_eq!(
-            result,
-            "not initialized \u{2717} \u{2014} run: engram init",
+            result, "not initialized \u{2717} \u{2014} run: engram init",
             "should return not-initialized label when nothing is configured"
         );
     }
-
 
     // ── resolve_vault unit tests ──────────────────────────────────────────────────
 

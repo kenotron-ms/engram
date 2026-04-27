@@ -52,7 +52,9 @@ impl SyncManifest {
         let home = std::env::var("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("."));
-        home.join(".engram").join(vault_name).join("sync-manifest.json")
+        home.join(".engram")
+            .join(vault_name)
+            .join("sync-manifest.json")
     }
 
     /// Load manifest from disk.  Returns empty manifest if not found or corrupt.
