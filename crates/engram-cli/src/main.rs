@@ -856,8 +856,10 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     // ── End sync mode gate ──────────────────────────────────────────────────
 
     use engram_sync::{
+        azure::AzureBackend,
         backend::SyncBackend,
         encrypt::encrypt_for_sync,
+        gcs::GcsBackend,
         manifest::{FileEntry, SyncManifest},
         onedrive::OneDriveBackend,
         s3::S3Backend,
@@ -912,9 +914,39 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
             let folder = creds.folder.as_deref().unwrap_or_default();
             Box::new(OneDriveBackend::new(token, folder))
         }
+        "azure" => {
+            let account = creds.account.as_deref().unwrap_or_default();
+            let container = creds.container.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            match AzureBackend::new(account, ak, container) {
+                Ok(b) => Box::new(b),
+                Err(e) => {
+                    eprintln!("Failed to initialize Azure backend: {}", e);
+                    eprintln!(
+                        "Check account, container, and access key via: engram auth add azure --vault <name>"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        "gcs" => {
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            // Service-account key file path is stored in the access_key field.
+            let key_path = creds.access_key.as_deref().unwrap_or_default();
+            match GcsBackend::new(bucket, key_path) {
+                Ok(b) => Box::new(b),
+                Err(e) => {
+                    eprintln!("Failed to initialize GCS backend: {}", e);
+                    eprintln!(
+                        "Check bucket and service account key path via: engram auth add gcs --vault <name>"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
         other => {
             eprintln!(
-                "Backend '{}' is not yet supported in engram sync. Use: s3, onedrive",
+                "Backend '{}' is not yet supported in engram sync. Use: s3, onedrive, azure, gcs",
                 other
             );
             std::process::exit(1);
