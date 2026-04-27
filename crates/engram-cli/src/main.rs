@@ -1788,6 +1788,42 @@ fn doctor_key_method(config: &EngramConfig) -> String {
 }
 
 /// Print diagnostic information about the engram installation.
+fn daemon_service_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("launchctl")
+            .args(["list", "com.engram.daemon"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                // launchctl list output: first field is PID (number) or "-" (not running)
+                let first_field = text.split_whitespace().next().unwrap_or("-");
+                if first_field != "-" {
+                    "running".to_string()
+                } else {
+                    "installed (not running)".to_string()
+                }
+            }
+            _ => "not installed".to_string(),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let out = std::process::Command::new("systemctl")
+            .args(["--user", "is-active", "engram.service"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Err(_) => "unknown".to_string(),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        "not supported on this platform".to_string()
+    }
+}
+
 fn run_doctor() {
     // Load config once to avoid redundant filesystem reads across helpers.
     let config = EngramConfig::load();
@@ -1847,10 +1883,32 @@ fn run_doctor() {
         );
     }
 
-    // ── ANTHROPIC_API_KEY status ───────────────────────────────────────────────
-    match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(v) if !v.is_empty() => println!("ANTHROPIC_API_KEY: set \u{2713}"),
-        _ => println!("ANTHROPIC_API_KEY: not set"),
+    // ── Daemon service status ──────────────────────────────────────────────────
+    let svc = daemon_service_status();
+    let svc_icon = if svc == "running" { "✓" } else { "✗" };
+    println!("Daemon:            {svc_icon} {svc}");
+
+    // ── sync.key file ─────────────────────────────────────────────────────────
+    let key_path = UserDirs::new()
+        .map(|u| u.home_dir().join(".engram").join("sync.key"))
+        .unwrap_or_else(|| PathBuf::from(".engram/sync.key"));
+    if key_path.exists() {
+        println!("sync.key:          ✓ present");
+    } else {
+        println!("sync.key:          ✗ missing — run 'engram install' to create");
+    }
+
+    // ── Search index status ──────────────────────────────────────────────────
+    println!("{}", search_index_status(&default_search_dir()));
+
+    // ── Sync credentials ─────────────────────────────────────────────────────
+    let creds_path = UserDirs::new()
+        .map(|u| u.home_dir().join(".engram").join("credentials"))
+        .unwrap_or_else(|| PathBuf::from(".engram/credentials"));
+    if creds_path.exists() {
+        println!("Sync credentials:  ✓ configured");
+    } else {
+        println!("Sync credentials:  - not configured (run 'engram auth')");
     }
 }
 
@@ -2647,5 +2705,14 @@ mod tests {
             "resolve_vault(None) with no config should fall back to .lifeos/memory, got: {}",
             path_str
         );
+    }
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    #[test]
+    fn daemon_status_returns_string() {
+        let status = super::daemon_service_status();
+        assert!(!status.is_empty());
     }
 }
