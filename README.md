@@ -27,6 +27,25 @@ engram index                         # index vault for search
 engram search "Sofia dietary needs"  # hybrid semantic + full-text search
 ```
 
+## Passphrase Setup
+
+Engram uses a passphrase to derive the vault encryption key. On macOS, store it once in Keychain for silent operation:
+
+```bash
+security add-generic-password -a engram -s engram-vault -w "your-passphrase"
+engram sync
+engram awareness
+```
+
+**Other options:**
+
+```bash
+export ENGRAM_VAULT_PASSPHRASE="your-passphrase"        # remote servers / CI / Docker
+export ENGRAM_VAULT_KEY="$(engram init --print-key)"    # CI / automation
+```
+
+Run `engram doctor` to see which tier is active and get setup instructions.
+
 ## CLI Reference
 
 ### Memory & Search
