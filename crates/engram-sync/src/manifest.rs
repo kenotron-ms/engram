@@ -171,6 +171,10 @@ impl BiSyncState {
     }
 
     pub fn save(&self, state_path: &std::path::Path) -> std::io::Result<()> {
+        // Ensure parent directory exists (first bisync on a fresh vault has no state dir yet).
+        if let Some(parent) = state_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let tmp = state_path.with_extension("tmp");
         let json = serde_json::to_string_pretty(self).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
@@ -254,6 +258,19 @@ pub fn classify_changes(
 #[cfg(test)]
 mod bisync_tests {
     use super::*;
+
+    /// BiSyncState::save must succeed even when the parent directory does not exist yet.
+    /// This is the case on the very first bisync for a fresh vault that has never synced.
+    #[test]
+    fn bisync_state_save_creates_missing_parent_dir() {
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        // Point to a path nested two levels deep that doesn't exist yet.
+        let state_path = dir.path().join("fresh-vault").join("bisync-state.json");
+        assert!(!state_path.parent().unwrap().exists(), "parent should not exist before save");
+        let state = BiSyncState::default();
+        state.save(&state_path).expect("save must succeed even with missing parent dir");
+        assert!(state_path.exists(), "state file must be written");
+    }
 
     #[test]
     fn bisync_state_roundtrips_json() {

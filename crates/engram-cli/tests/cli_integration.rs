@@ -22,7 +22,7 @@ fn test_status_output_contains_required_labels() {
     cmd.arg("status");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Vault:"))
+        .stdout(predicate::str::contains("Vaults:"))
         .stdout(predicate::str::contains("Memory store:"))
         .stdout(predicate::str::contains("Key:"));
 }
@@ -62,7 +62,7 @@ fn test_status_vault_state_is_printed() {
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("files)") || stdout.contains("NOT FOUND"),
+        stdout.contains(" files") || stdout.contains("NOT FOUND"),
         "Vault line must contain either a file count or 'NOT FOUND', got: {}",
         stdout
     );

@@ -11,8 +11,8 @@ const MICROSOFT_TOKEN_URL: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/token";
 
 // The engram OneDrive app client_id — public client, no secret needed for token refresh.
-// TODO: replace with actual app client_id registered for engram
-const ONEDRIVE_CLIENT_ID: &str = "07393f4b-b8c7-4e52-b5e4-1fe2df8c6b4c";
+// Must match the client_id used in the OAuth authorization flow (main.rs).
+const ONEDRIVE_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
 
 /// Internal token state, shared behind a Mutex for interior mutability.
 /// Using std::sync::Mutex (not tokio) is intentional: we never hold the guard
@@ -28,6 +28,22 @@ pub struct OneDriveBackend {
     folder: String, // e.g. "/Apps/Engram/vault"
 }
 
+
+/// Build the relative path key for a file returned by the Graph API list call.
+///
+/// When `prefix` is empty (listing the vault root), the key is just `name`.
+/// When `prefix` is non-empty the key is `{prefix}/{name}`.
+///
+/// The "always use format!" approach produces a leading slash ("/notes.md")
+/// for empty prefix which causes bisync to classify every root-level file as
+/// `DeletedRemotely` because local manifest keys never have a leading slash.
+fn list_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", prefix, name)
+    }
+}
 
 impl OneDriveBackend {
     /// Create a backend with only an access token (no auto-refresh on 401).
@@ -56,6 +72,7 @@ impl OneDriveBackend {
     fn full_path(&self, path: &str) -> String {
         format!("{}/{}", self.folder.trim_end_matches('/'), path)
     }
+
 
     /// Returns `true` if a refresh token is configured on this backend.
     ///
@@ -241,7 +258,7 @@ impl SyncBackend for OneDriveBackend {
             .as_array()
             .unwrap_or(&vec![])
             .iter()
-            .filter_map(|item| item["name"].as_str().map(|s| format!("{}/{}", prefix, s)))
+            .filter_map(|item| item["name"].as_str().map(|s| list_path(prefix, s)))
             .collect();
         Ok(names)
     }
@@ -303,6 +320,18 @@ mod refresh_tests {
         );
         assert!(!ONEDRIVE_CLIENT_ID.is_empty(), "client_id must be set");
     }
+
+    /// The client_id used for token refresh must match the one used for the
+    /// initial OAuth authorization flow in main.rs — otherwise token refresh
+    /// fails with AADSTS70011.
+    #[test]
+    fn client_id_matches_auth_flow() {
+        assert_eq!(
+            ONEDRIVE_CLIENT_ID,
+            "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+            "ONEDRIVE_CLIENT_ID must match the client_id used in the auth flow"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -333,6 +362,26 @@ mod tests {
     fn test_backend_name() {
         let backend = OneDriveBackend::new("token", "/Apps/Engram/vault");
         assert_eq!(backend.backend_name(), "onedrive");
+    }
+
+    /// When list("") is called with an empty prefix the returned keys must have
+    /// no leading slash — otherwise bisync compares "/notes.md" against the
+    /// local manifest key "notes.md" and classifies every file as DeletedRemotely.
+    #[test]
+    fn test_list_path_empty_prefix_no_leading_slash() {
+        assert_eq!(
+            super::list_path("", "notes.md"),
+            "notes.md",
+            "empty prefix must not produce a leading slash"
+        );
+    }
+
+    #[test]
+    fn test_list_path_nonempty_prefix_joined_with_slash() {
+        assert_eq!(
+            super::list_path("subdir", "notes.md"),
+            "subdir/notes.md"
+        );
     }
 
     #[test]
