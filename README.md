@@ -29,22 +29,16 @@ engram search "Sofia dietary needs"  # hybrid semantic + full-text search
 
 ## Passphrase Setup
 
-Engram uses a passphrase to derive the vault encryption key. On macOS, store it once in Keychain for silent operation:
-
-```bash
-security add-generic-password -a engram -s engram-vault -w "your-passphrase"
-engram sync
-engram awareness
-```
-
-**Other options:**
+Engram uses a passphrase to derive the vault encryption key. Set it via env var to avoid interactive prompts:
 
 ```bash
 export ENGRAM_VAULT_PASSPHRASE="your-passphrase"        # remote servers / CI / Docker
 export ENGRAM_VAULT_KEY="<base64-encoded-32-byte-key>"  # CI / automation (store in CI secrets)
 ```
 
-Run `engram doctor` to see which tier is active and get setup instructions.
+If neither env var is set, `engram` will prompt interactively (requires a salt from `engram init`).
+
+Run `engram doctor` to see which method is active.
 
 ## CLI Reference
 

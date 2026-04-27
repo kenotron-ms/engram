@@ -306,14 +306,13 @@ fn main() {
     }
 }
 
-/// Resolve the vault encryption key using a four-tier fallback strategy.
+/// Resolve the vault encryption key using a three-tier fallback strategy.
 ///
 /// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
 ///   into an [`engram_core::crypto::EngramKey`].
 /// Tier 2 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
 ///   derived using Argon2id with the salt stored in the engram config file.
-/// Tier 3 — macOS Keychain via `security find-generic-password`.
-/// Tier 4 — Interactive `rpassword` prompt + salt from config.
+/// Tier 3 — Interactive `rpassword` prompt + salt from config.
 ///
 /// Never panics. Returns a human-friendly `Err(String)` on failure.
 fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
@@ -344,35 +343,7 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
             .map_err(|e| format!("Key derivation failed: {}", e));
     }
 
-    // ── Tier 3: macOS Keychain via security find-generic-password ─────────────────
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("security")
-            .args([
-                "find-generic-password",
-                "-a",
-                "engram",
-                "-s",
-                "engram-vault",
-                "-w",
-            ])
-            .output()
-        {
-            if output.status.success() {
-                let passphrase_raw = String::from_utf8_lossy(&output.stdout);
-                let passphrase = passphrase_raw.trim();
-                if let Some(salt) = load_salt() {
-                    if let Ok(key) =
-                        engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
-                    {
-                        return Ok(key);
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Tier 4: interactive rpassword prompt + config salt ────────────────────
+    // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
     let salt =
         load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
     let passphrase = rpassword::prompt_password("Vault passphrase: ")
@@ -499,7 +470,7 @@ fn run_auth_add_s3(
     let config = EngramConfig::load();
 
     // Verify vault exists in config.
-    if config.vaults.get(&vault_name).is_none() {
+    if !config.vaults.contains_key(&vault_name) {
         eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
@@ -588,7 +559,7 @@ fn run_auth_add_onedrive(folder: &str) {
     let config = EngramConfig::load();
 
     // Verify vault exists in config.
-    if config.vaults.get(&vault_name).is_none() {
+    if !config.vaults.contains_key(&vault_name) {
         eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
@@ -636,7 +607,7 @@ fn run_auth_add_azure(vault_arg: &str, account: &str, container: &str) {
     let config = EngramConfig::load();
 
     // Verify vault exists in config.
-    if config.vaults.get(&vault_name).is_none() {
+    if !config.vaults.contains_key(&vault_name) {
         eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
@@ -673,7 +644,7 @@ fn run_auth_add_gdrive(vault_arg: &str, bucket: &str, key_file: &str) {
     let config = EngramConfig::load();
 
     // Verify vault exists in config.
-    if config.vaults.get(&vault_name).is_none() {
+    if !config.vaults.contains_key(&vault_name) {
         eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
@@ -765,7 +736,7 @@ fn run_auth_list() {
 fn run_auth_remove(vault_name: &str) {
     // Verify vault exists in config (graceful error if not registered).
     let config = EngramConfig::load();
-    if config.vaults.get(vault_name).is_none() {
+    if !config.vaults.contains_key(vault_name) {
         eprintln!("Vault '{}' not found in config.", vault_name);
         std::process::exit(1);
     }
@@ -1804,19 +1775,13 @@ fn run_uninstall() {
 }
 
 /// Compute the key-method label for `engram doctor` output.
-///
-/// `keychain_available` should be `true` when the macOS Keychain already holds an
-/// `engram-vault` entry (determined by the caller via `security find-generic-password`),
-/// and `false` on non-macOS platforms or when no entry is present.
-fn doctor_key_method(config: &EngramConfig, keychain_available: bool) -> String {
+fn doctor_key_method(config: &EngramConfig) -> String {
     if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
         "ENGRAM_VAULT_KEY env var \u{2713}".to_string()
     } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
         "ENGRAM_VAULT_PASSPHRASE env var \u{2713}".to_string()
-    } else if keychain_available {
-        "macOS Keychain (security CLI) \u{2713}".to_string()
     } else if config.key.salt.is_some() {
-        "interactive passphrase prompt (salt configured) \u{2713}".to_string()
+        "passphrase prompt (salt configured) \u{2713}".to_string()
     } else {
         "not initialized \u{2717} \u{2014} run: engram init".to_string()
     }
@@ -1854,33 +1819,8 @@ fn run_doctor() {
     }
 
     // ── Key method ─────────────────────────────────────────────────────────────
-    #[cfg(target_os = "macos")]
-    let keychain_available = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            "engram",
-            "-s",
-            "engram-vault",
-            "-w",
-        ])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    #[cfg(not(target_os = "macos"))]
-    let keychain_available = false;
-
-    let key_method = doctor_key_method(&config, keychain_available);
+    let key_method = doctor_key_method(&config);
     println!("Key:               {}", key_method);
-
-    #[cfg(target_os = "macos")]
-    if std::env::var("ENGRAM_VAULT_KEY").is_err()
-        && std::env::var("ENGRAM_VAULT_PASSPHRASE").is_err()
-        && !keychain_available
-    {
-        println!("Tip: store passphrase in macOS Keychain for silent operation:");
-        println!("  security add-generic-password -a engram -s engram-vault -w <your-passphrase>");
-    }
 
     // ── Memory store status ────────────────────────────────────────────────────
     let store_path = default_store_path_from_config(&config);
@@ -2598,78 +2538,6 @@ mod tests {
         );
     }
 
-    /// Tier 3 (macOS Keychain): when an `engram-vault` entry exists in the login
-    /// keychain, `resolve_vault_key()` must return `Ok(_)` without an interactive
-    /// prompt.  The entry is added and removed around the test; if
-    /// `security add-generic-password` fails (e.g. CI without a login keychain),
-    /// the test is skipped rather than failing.
-    #[cfg(target_os = "macos")]
-    #[test]
-    #[serial]
-    fn test_resolve_key_keychain_tier_uses_keychain_entry_when_present() {
-        use tempfile::TempDir;
-
-        // Attempt to add a temporary keychain entry.  If this fails we skip.
-        let add_status = std::process::Command::new("security")
-            .args([
-                "add-generic-password",
-                "-a",
-                "engram",
-                "-s",
-                "engram-vault",
-                "-w",
-                "keychain-test-passphrase",
-                "-U", // update if already present
-            ])
-            .status();
-
-        let Ok(status) = add_status else {
-            // `security` binary not available â skip.
-            return;
-        };
-        if !status.success() {
-            // Keychain unavailable in this environment â skip.
-            return;
-        }
-
-        // Cleanup guard: always delete the entry when we leave this test.
-        struct KeychainGuard;
-        impl Drop for KeychainGuard {
-            fn drop(&mut self) {
-                let _ = std::process::Command::new("security")
-                    .args([
-                        "delete-generic-password",
-                        "-a",
-                        "engram",
-                        "-s",
-                        "engram-vault",
-                    ])
-                    .output();
-            }
-        }
-        let _guard = KeychainGuard;
-
-        // Set up a temp config with a zero salt so key derivation can succeed.
-        let dir = TempDir::new().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let zero_salt = B64.encode([0u8; 16]);
-        std::fs::write(&config_path, format!("[key]\nsalt = \"{}\"\n", zero_salt)).unwrap();
-
-        std::env::remove_var("ENGRAM_VAULT_KEY");
-        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
-        std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
-
-        let result = resolve_vault_key();
-
-        std::env::remove_var("ENGRAM_CONFIG_PATH");
-
-        assert!(
-            result.is_ok(),
-            "Tier 3 (macOS Keychain) should derive a key from the keychain entry; got: {:?}",
-            result
-        );
-    }
-
     // ── doctor_key_method unit tests ─────────────────────────────────────────────────────────────
 
     /// `doctor_key_method` returns the ENGRAM_VAULT_KEY env var label when that env var is set.
@@ -2680,7 +2548,7 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
         std::env::set_var("ENGRAM_VAULT_KEY", "dummy");
 
-        let result = doctor_key_method(&config, false);
+        let result = doctor_key_method(&config);
 
         std::env::remove_var("ENGRAM_VAULT_KEY");
 
@@ -2699,7 +2567,7 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::set_var("ENGRAM_VAULT_PASSPHRASE", "dummy");
 
-        let result = doctor_key_method(&config, false);
+        let result = doctor_key_method(&config);
 
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
 
@@ -2709,46 +2577,30 @@ mod tests {
         );
     }
 
-    /// `doctor_key_method` returns the Keychain label when keychain_available is true and no env
-    /// vars are set.
-    #[test]
-    #[serial]
-    fn test_doctor_key_method_keychain_available() {
-        let config = EngramConfig::default();
-        std::env::remove_var("ENGRAM_VAULT_KEY");
-        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
-
-        let result = doctor_key_method(&config, true);
-
-        assert_eq!(
-            result, "macOS Keychain (security CLI) \u{2713}",
-            "should return Keychain label when keychain_available is true"
-        );
-    }
-
-    /// `doctor_key_method` returns the interactive passphrase prompt label when salt is configured,
-    /// no env vars set, and keychain is not available.
+    /// `doctor_key_method` returns the passphrase prompt label when salt is configured
+    /// and no env vars are set.
     #[test]
     #[serial]
     fn test_doctor_key_method_salt_configured() {
         use engram_core::config::KeyConfig;
-        let mut config = EngramConfig::default();
-        config.key = KeyConfig {
-            salt: Some("c29tZXNhbHQ=".to_string()),
+        let config = EngramConfig {
+            key: KeyConfig {
+                salt: Some("c29tZXNhbHQ=".to_string()),
+            },
+            ..Default::default()
         };
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
 
-        let result = doctor_key_method(&config, false);
+        let result = doctor_key_method(&config);
 
         assert_eq!(
-            result, "interactive passphrase prompt (salt configured) \u{2713}",
+            result, "passphrase prompt (salt configured) \u{2713}",
             "should return interactive passphrase prompt label when salt is configured"
         );
     }
 
-    /// `doctor_key_method` returns the not-initialized label when no env vars, no keychain, and
-    /// no salt.
+    /// `doctor_key_method` returns the not-initialized label when no env vars and no salt.
     #[test]
     #[serial]
     fn test_doctor_key_method_not_initialized() {
@@ -2756,7 +2608,7 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
 
-        let result = doctor_key_method(&config, false);
+        let result = doctor_key_method(&config);
 
         assert_eq!(
             result, "not initialized \u{2717} \u{2014} run: engram init",
