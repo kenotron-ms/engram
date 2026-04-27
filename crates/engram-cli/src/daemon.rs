@@ -32,13 +32,19 @@ pub enum DaemonError {
 
 /// Returns true if the path is a vault .md file that should trigger
 /// reindexing/sync. Excludes: hidden files, .conflict copies, non-.md files.
-pub fn is_vault_md_event_path(path: &Path) -> bool {
+///
+/// `vault_root` is used to strip the vault prefix before checking for hidden
+/// components, so a vault stored inside a hidden directory (e.g. `~/.vaults/main`)
+/// is not incorrectly rejected.
+pub fn is_vault_md_event_path(vault_root: &Path, path: &Path) -> bool {
     // Must have .md extension
     if path.extension().and_then(|e| e.to_str()) != Some("md") {
         return false;
     }
-    // Reject hidden files and files inside hidden directories
-    for component in path.components() {
+    // Only check components RELATIVE to vault root, not absolute path components.
+    // This allows vault roots that live inside hidden directories (e.g. ~/.vaults/).
+    let relative = path.strip_prefix(vault_root).unwrap_or(path);
+    for component in relative.components() {
         if let std::path::Component::Normal(name) = component {
             let s = name.to_string_lossy();
             if s.starts_with('.') {
@@ -75,6 +81,7 @@ pub fn watch_vault(
 
     watcher.watch(vault_path, RecursiveMode::Recursive)?;
 
+    let vault_root = vault_path.to_path_buf();
     std::thread::spawn(move || {
         let mut last_seen: HashMap<PathBuf, Instant> = HashMap::new();
 
@@ -94,7 +101,7 @@ pub fn watch_vault(
             }
 
             for path in event.paths {
-                if !is_vault_md_event_path(&path) {
+                if !is_vault_md_event_path(&vault_root, &path) {
                     continue;
                 }
                 let now = Instant::now();
@@ -124,23 +131,38 @@ mod tests {
 
     #[test]
     fn vault_event_identifies_md_files() {
-        assert!(is_vault_md_event_path(Path::new("/vault/notes.md")));
-        assert!(is_vault_md_event_path(Path::new("/vault/subdir/entry.md")));
-        assert!(!is_vault_md_event_path(Path::new("/vault/notes.txt")));
-        assert!(!is_vault_md_event_path(Path::new("/vault/.DS_Store")));
-        assert!(!is_vault_md_event_path(Path::new("/vault/transcript.jsonl")));
+        let root = Path::new("/vault");
+        assert!(is_vault_md_event_path(root, Path::new("/vault/notes.md")));
+        assert!(is_vault_md_event_path(root, Path::new("/vault/subdir/entry.md")));
+        assert!(!is_vault_md_event_path(root, Path::new("/vault/notes.txt")));
+        assert!(!is_vault_md_event_path(root, Path::new("/vault/.DS_Store")));
+        assert!(!is_vault_md_event_path(root, Path::new("/vault/transcript.jsonl")));
     }
 
     #[test]
     fn vault_event_ignores_hidden_files() {
-        assert!(!is_vault_md_event_path(Path::new("/vault/.hidden.md")));
-        assert!(!is_vault_md_event_path(Path::new("/vault/.git/COMMIT_EDITMSG")));
+        let root = Path::new("/vault");
+        assert!(!is_vault_md_event_path(root, Path::new("/vault/.hidden.md")));
+        assert!(!is_vault_md_event_path(root, Path::new("/vault/.git/COMMIT_EDITMSG")));
     }
 
     #[test]
     fn conflict_copies_excluded_from_watch() {
-        assert!(!is_vault_md_event_path(Path::new(
+        let root = Path::new("/vault");
+        assert!(!is_vault_md_event_path(root, Path::new(
             "/vault/note.conflict-2026-04-26-120000.md"
         )));
+    }
+
+    #[test]
+    fn vault_in_hidden_dir_still_watched() {
+        // Vault root is in a hidden directory — files inside should still be indexed.
+        // This test exposes the bug: the current implementation rejects any path
+        // that has a dot-prefixed component anywhere, including the vault root itself.
+        let root = Path::new("/home/user/.vaults/main");
+        assert!(is_vault_md_event_path(root, Path::new("/home/user/.vaults/main/notes.md")));
+        assert!(is_vault_md_event_path(root, Path::new("/home/user/.vaults/main/subdir/entry.md")));
+        // But hidden files WITHIN the vault are still excluded
+        assert!(!is_vault_md_event_path(root, Path::new("/home/user/.vaults/main/.hidden.md")));
     }
 }

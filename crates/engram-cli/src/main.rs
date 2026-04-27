@@ -1767,19 +1767,26 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
 /// Called by the daemon when a *.md file changes. Skips silently if no
 /// search index exists yet (user hasn't run `engram index`).
 fn index_single_file(
-    _vault_path: &std::path::Path,
+    vault_path: &std::path::Path,
     file_path: &std::path::Path,
     vault_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let search_dir = vault_storage_dir(vault_name).join("search");
-    // Only index if a search index already exists; don't create one on-the-fly.
-    if !search_dir.exists() {
+    // Only index if a search index already exists (meta.json present); don't
+    // create one on-the-fly. Checking meta.json is more precise than checking
+    // directory existence — a partially-created or empty directory is not an index.
+    if !search_dir.join("meta.json").exists() {
         return Ok(());
     }
     let content = std::fs::read_to_string(file_path)?;
-    let path_str = file_path.to_string_lossy();
+    // Use vault-relative path as document key to match what index_vault uses.
+    // This prevents duplicate documents when the same file is re-indexed.
+    let rel = file_path
+        .strip_prefix(vault_path)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| file_path.to_string_lossy().into_owned());
     let mut indexer = TantivyIndexer::open(&search_dir)?;
-    indexer.index_file(&path_str, &content)?;
+    indexer.index_file(&rel, &content)?;
     Ok(())
 }
 
