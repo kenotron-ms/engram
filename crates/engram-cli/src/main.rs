@@ -538,12 +538,19 @@ fn run_auth_add_onedrive(folder: &str) {
             ("scope", "Files.ReadWrite offline_access"),
         ])
         .send()
-        .expect("Token exchange request failed");
+        .unwrap_or_else(|e| {
+            eprintln!("Token exchange request failed: {}", e);
+            std::process::exit(1);
+        });
 
-    let json: serde_json::Value = response.json().expect("Invalid token response");
-    let access_token = json["access_token"]
-        .as_str()
-        .expect("No access_token in response");
+    let json: serde_json::Value = response.json().unwrap_or_else(|e| {
+        eprintln!("Invalid token response: {}", e);
+        std::process::exit(1);
+    });
+    let access_token = json["access_token"].as_str().unwrap_or_else(|| {
+        eprintln!("No access_token in response");
+        std::process::exit(1);
+    });
     let refresh_token = json["refresh_token"].as_str().unwrap_or("").to_string();
     let access_token = access_token.to_string();
 
@@ -867,7 +874,7 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
                 Ok(b) => Box::new(b),
                 Err(e) => {
                     eprintln!("Failed to initialize S3 backend: {}", e);
-                    eprintln!("Check the endpoint URL and credentials in ~/.engram/config.toml");
+                    eprintln!("Check the endpoint URL and credentials via: engram auth add s3 --vault <name>");
                     std::process::exit(1);
                 }
             }
