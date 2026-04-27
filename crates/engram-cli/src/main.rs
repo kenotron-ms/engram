@@ -1720,6 +1720,9 @@ fn search_index_status(search_dir: &Path) -> String {
 }
 
 /// Watch configured vaults for *.md file changes and incrementally update the search index.
+/// Vaults with `sync_mode = Auto` also get:
+///   (a) a debounced upload trigger on local change (10-second quiet period)
+///   (b) a periodic pull loop every 5 minutes
 fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     use crate::daemon::{watch_vault, VaultEvent};
     use std::sync::mpsc;
@@ -1756,6 +1759,26 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Pull loop: background thread fires every 5 minutes for SyncMode::Auto vaults.
+    let config_for_pull = config.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(300));
+            rt.block_on(async {
+                for (name, vault) in &config_for_pull.vaults {
+                    if vault.sync_mode != SyncMode::Auto {
+                        continue;
+                    }
+                    let state_path = engram_bisync_state_path(name);
+                    if let Err(e) = trigger_bisync(name, vault, &state_path).await {
+                        eprintln!("  pull sync error for '{name}': {e}");
+                    }
+                }
+            });
+        }
+    });
+
     // Handle SIGTERM/SIGINT for clean shutdown
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     {
@@ -1766,13 +1789,17 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Debounce map: vault_name → last event time, used for SyncMode::Auto upload trigger.
+    let mut sync_pending: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
+    let sync_debounce = std::time::Duration::from_secs(10);
+
     // Event loop
     while running.load(std::sync::atomic::Ordering::SeqCst) {
         match rx.recv_timeout(std::time::Duration::from_secs(1)) {
             Ok(event) => {
                 if event.deleted {
                     eprintln!("  [{}] deleted: {}", event.vault_name, event.path.display());
-                    // TODO(Phase 4): trigger sync delete for auto-mode vaults
                 } else {
                     eprintln!("  [{}] changed: {}", event.vault_name, event.path.display());
                     // Incremental search index update
@@ -1780,18 +1807,133 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                         if let Err(e) = index_single_file(&vault.path, &event.path, &event.vault_name) {
                             eprintln!("  index error for {}: {e}", event.path.display());
                         }
-                        // TODO(Phase 4): trigger debounced auto-sync for auto-mode vaults
+                    }
+                }
+                // Mark for debounced auto-sync if vault uses SyncMode::Auto.
+                if let Some(vault) = config.vaults.get(&event.vault_name) {
+                    if vault.sync_mode == SyncMode::Auto {
+                        sync_pending.insert(event.vault_name.clone(), std::time::Instant::now());
                     }
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Normal — check running flag and loop
+                // Flush any debounced auto-sync triggers whose quiet period has elapsed.
+                let now = std::time::Instant::now();
+                let ready: Vec<String> = sync_pending
+                    .iter()
+                    .filter(|(_, t)| now.duration_since(**t) >= sync_debounce)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                for name in ready {
+                    sync_pending.remove(&name);
+                    if let Some(vault) = config.vaults.get(&name) {
+                        let state_path = engram_bisync_state_path(&name);
+                        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+                        if let Err(e) = rt.block_on(trigger_bisync(&name, vault, &state_path)) {
+                            eprintln!("  auto-sync error for '{name}': {e}");
+                        }
+                    }
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
     println!("engram daemon stopped.");
+    Ok(())
+}
+
+/// Return the path where bisync state is persisted for the named vault.
+///
+/// Resolves to `~/.engram/<vault_name>/bisync-state.json`, falling back to
+/// `/tmp/.engram/<vault_name>/bisync-state.json` if the home directory cannot
+/// be determined.
+fn engram_bisync_state_path(vault_name: &str) -> std::path::PathBuf {
+    install::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".engram")
+        .join(vault_name)
+        .join("bisync-state.json")
+}
+
+/// Run `engram_sync::run_bisync` for a single vault using the credentials
+/// stored in `~/.engram/credentials`.
+///
+/// Returns an error if:
+/// - No credentials are configured for the vault.
+/// - The vault key cannot be resolved.
+/// - The backend cannot be initialised.
+/// - The bisync operation itself fails.
+async fn trigger_bisync(
+    vault_name: &str,
+    vault: &engram_core::config::VaultEntry,
+    state_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use engram_sync::{
+        azure::AzureBackend,
+        gcs::GcsBackend,
+        onedrive::OneDriveBackend,
+        run_bisync,
+        s3::S3Backend,
+    };
+
+    let all_creds = EngramConfig::load_credentials();
+    let creds = EngramConfig::credentials_for_vault(vault_name, &all_creds)
+        .ok_or_else(|| format!("no credentials for vault '{vault_name}'"))?;
+
+    let key = resolve_vault_key().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        e.into()
+    })?;
+
+    match creds.backend.as_str() {
+        "s3" => {
+            let endpoint = creds.endpoint.as_deref().unwrap_or_default();
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            let sk = creds.secret_key.as_deref().unwrap_or_default();
+            let backend = S3Backend::new(endpoint, bucket, ak, sk)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "onedrive" => {
+            let token = creds.access_token.as_deref().unwrap_or_default();
+            let folder = creds.folder.as_deref().unwrap_or_default();
+            let backend = OneDriveBackend::new(token, folder);
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "azure" => {
+            let account = creds.account.as_deref().unwrap_or_default();
+            let container = creds.container.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            let backend = AzureBackend::new(account, ak, container)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "gcs" => {
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            // Service-account key file path is stored in the access_key field.
+            let key_path = creds.access_key.as_deref().unwrap_or_default();
+            let backend = GcsBackend::new(bucket, key_path)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        other => {
+            eprintln!("  unsupported backend '{other}' for vault '{vault_name}'");
+        }
+    }
     Ok(())
 }
 
@@ -2850,6 +2992,30 @@ mod doctor_tests {
         assert!(
             known_prefixes.iter().any(|&p| status.starts_with(p)),
             "unexpected daemon status: {status}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod auto_sync_tests {
+    #[test]
+    fn auto_sync_only_for_auto_mode_vaults() {
+        let source = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")
+        ).unwrap();
+
+        // Scope check to the run_daemon() function body only, so we don't
+        // accidentally match SyncMode::Auto from run_sync() or other functions.
+        let daemon_start = source.find("fn run_daemon(").expect("run_daemon not found");
+        let daemon_end = source[daemon_start + 1..]
+            .find("\nfn ")
+            .map(|i| daemon_start + 1 + i)
+            .unwrap_or(source.len());
+        let daemon_body = &source[daemon_start..daemon_end];
+
+        assert!(
+            daemon_body.contains("SyncMode::Auto"),
+            "daemon must check SyncMode::Auto before triggering sync"
         );
     }
 }
