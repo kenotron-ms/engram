@@ -1777,6 +1777,26 @@ fn run_uninstall() {
     }
 }
 
+/// Compute the key-method label for `engram doctor` output.
+///
+/// `keychain_available` should be `true` when the macOS Keychain already holds an
+/// `engram-vault` entry (determined by the caller via `security find-generic-password`),
+/// and `false` on non-macOS platforms or when no entry is present.
+fn doctor_key_method(config: &EngramConfig, keychain_available: bool) -> String {
+    if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
+        "ENGRAM_VAULT_KEY env var \u{2713}".to_string()
+    } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
+        "ENGRAM_VAULT_PASSPHRASE env var \u{2713}".to_string()
+    } else if keychain_available {
+        "macOS Keychain (security CLI) \u{2713}".to_string()
+    } else if config.key.salt.is_some() {
+        "interactive passphrase prompt (salt configured) \u{2713}".to_string()
+    } else {
+        "not initialized \u{2717} \u{2014} run: engram init".to_string()
+    }
+}
+
+
 /// Print diagnostic information about the engram installation.
 fn run_doctor() {
     // Load config once to avoid redundant filesystem reads across helpers.
@@ -1809,16 +1829,26 @@ fn run_doctor() {
     }
 
     // ── Key method ─────────────────────────────────────────────────────────────
-    let key_method = if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
-        "ENGRAM_VAULT_KEY"
-    } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
-        "ENGRAM_VAULT_PASSPHRASE"
-    } else if config.key.salt.is_some() {
-        "config salt"
-    } else {
-        "not initialized"
-    };
+    #[cfg(target_os = "macos")]
+    let keychain_available = std::process::Command::new("security")
+        .args(["find-generic-password", "-a", "engram", "-s", "engram-vault", "-w"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    #[cfg(not(target_os = "macos"))]
+    let keychain_available = false;
+
+    let key_method = doctor_key_method(&config, keychain_available);
     println!("Key:               {}", key_method);
+
+    #[cfg(target_os = "macos")]
+    if std::env::var("ENGRAM_VAULT_KEY").is_err()
+        && std::env::var("ENGRAM_VAULT_PASSPHRASE").is_err()
+        && !keychain_available
+    {
+        println!("Tip: store passphrase in macOS Keychain for silent operation:");
+        println!("  security add-generic-password -a engram -s engram-vault -w <your-passphrase>");
+    }
 
     // ── Memory store status ────────────────────────────────────────────────────
     let store_path = default_store_path_from_config(&config);
@@ -2607,6 +2637,106 @@ mod tests {
             result
         );
     }
+
+    // ── doctor_key_method unit tests ─────────────────────────────────────────────────────────────
+
+    /// `doctor_key_method` returns the ENGRAM_VAULT_KEY env var label when that env var is set.
+    #[test]
+    #[serial]
+    fn test_doctor_key_method_vault_key_env_var() {
+        let config = EngramConfig::default();
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        std::env::set_var("ENGRAM_VAULT_KEY", "dummy");
+
+        let result = doctor_key_method(&config, false);
+
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+
+        assert_eq!(
+            result,
+            "ENGRAM_VAULT_KEY env var \u{2713}",
+            "should return ENGRAM_VAULT_KEY label when env var is set"
+        );
+    }
+
+    /// `doctor_key_method` returns the ENGRAM_VAULT_PASSPHRASE label when that env var is set
+    /// and ENGRAM_VAULT_KEY is not set.
+    #[test]
+    #[serial]
+    fn test_doctor_key_method_passphrase_env_var() {
+        let config = EngramConfig::default();
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::set_var("ENGRAM_VAULT_PASSPHRASE", "dummy");
+
+        let result = doctor_key_method(&config, false);
+
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+
+        assert_eq!(
+            result,
+            "ENGRAM_VAULT_PASSPHRASE env var \u{2713}",
+            "should return ENGRAM_VAULT_PASSPHRASE label when env var is set"
+        );
+    }
+
+    /// `doctor_key_method` returns the Keychain label when keychain_available is true and no env
+    /// vars are set.
+    #[test]
+    #[serial]
+    fn test_doctor_key_method_keychain_available() {
+        let config = EngramConfig::default();
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+
+        let result = doctor_key_method(&config, true);
+
+        assert_eq!(
+            result,
+            "macOS Keychain (security CLI) \u{2713}",
+            "should return Keychain label when keychain_available is true"
+        );
+    }
+
+    /// `doctor_key_method` returns the interactive passphrase prompt label when salt is configured,
+    /// no env vars set, and keychain is not available.
+    #[test]
+    #[serial]
+    fn test_doctor_key_method_salt_configured() {
+        use engram_core::config::KeyConfig;
+        let mut config = EngramConfig::default();
+        config.key = KeyConfig {
+            salt: Some("c29tZXNhbHQ=".to_string()),
+        };
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+
+        let result = doctor_key_method(&config, false);
+
+        assert_eq!(
+            result,
+            "interactive passphrase prompt (salt configured) \u{2713}",
+            "should return interactive passphrase prompt label when salt is configured"
+        );
+    }
+
+    /// `doctor_key_method` returns the not-initialized label when no env vars, no keychain, and
+    /// no salt.
+    #[test]
+    #[serial]
+    fn test_doctor_key_method_not_initialized() {
+        let config = EngramConfig::default();
+        std::env::remove_var("ENGRAM_VAULT_KEY");
+        std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+
+        let result = doctor_key_method(&config, false);
+
+        assert_eq!(
+            result,
+            "not initialized \u{2717} \u{2014} run: engram init",
+            "should return not-initialized label when nothing is configured"
+        );
+    }
+
 
     // ── resolve_vault unit tests ──────────────────────────────────────────────────
 
