@@ -1,79 +1,116 @@
-// daemon.rs — file watcher
+//! Vault file watcher for the engram daemon.
+//!
+//! Watches configured vault paths for *.md file changes and emits
+//! VaultEvent on a channel. The daemon loop uses these events to
+//! trigger incremental reindexing and auto-sync.
 
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use thiserror::Error;
 
-/// Errors that can occur during daemon / file-watching operations.
-#[derive(Debug, Error)]
+const DEBOUNCE_DURATION: Duration = Duration::from_secs(3);
+
+#[derive(Debug, Clone)]
+pub struct VaultEvent {
+    /// Name of the vault (key in EngramConfig::vaults)
+    pub vault_name: String,
+    /// Absolute path to the changed .md file
+    pub path: PathBuf,
+    /// Whether this was a deletion
+    pub deleted: bool,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
-    #[error("notify error: {0}")]
-    Notify(#[from] notify::Error),
-
-    #[error("IO error: {0}")]
+    #[error("file watcher error: {0}")]
+    Watch(#[from] notify::Error),
+    #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
 
-/// Duration used to debounce repeated events for the same path.
-const DEBOUNCE_DURATION: Duration = Duration::from_secs(5);
-
-/// Returns `true` if `event` is a `Modify` or `Create` event and at least one
-/// of its paths has the file name `transcript.jsonl`.
-pub fn is_transcript_event(event: &Event) -> bool {
-    let is_relevant_kind = matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_));
-    if !is_relevant_kind {
+/// Returns true if the path is a vault .md file that should trigger
+/// reindexing/sync. Excludes: hidden files, .conflict copies, non-.md files.
+pub fn is_vault_md_event_path(path: &Path) -> bool {
+    // Must have .md extension
+    if path.extension().and_then(|e| e.to_str()) != Some("md") {
         return false;
     }
-    event.paths.iter().any(|p| {
-        p.file_name()
-            .map(|name| name == "transcript.jsonl")
-            .unwrap_or(false)
-    })
+    // Reject hidden files and files inside hidden directories
+    for component in path.components() {
+        if let std::path::Component::Normal(name) = component {
+            let s = name.to_string_lossy();
+            if s.starts_with('.') {
+                return false;
+            }
+        }
+    }
+    // Reject .conflict copies: filename stem contains ".conflict-"
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        if stem.contains(".conflict-") {
+            return false;
+        }
+    }
+    true
 }
 
-/// Watch `watch_dir` recursively. When a `transcript.jsonl` file is modified or
-/// created, sends its [`PathBuf`] through `tx` (debounced per-path to at most
-/// one send per [`DEBOUNCE_DURATION`]).
+/// Start a file watcher on `vault_path`, emitting `VaultEvent` on `tx`
+/// for every debounced *.md Create/Modify/Remove event.
 ///
-/// The returned [`RecommendedWatcher`] must be kept alive by the caller; dropping
-/// it stops the underlying OS watcher and terminates the background thread.
-pub fn watch_sessions(
-    watch_dir: &Path,
-    tx: mpsc::Sender<PathBuf>,
+/// Returns the watcher (caller must keep it alive for events to fire).
+pub fn watch_vault(
+    vault_name: String,
+    vault_path: &Path,
+    tx: mpsc::Sender<VaultEvent>,
 ) -> Result<RecommendedWatcher, DaemonError> {
-    let (notify_tx, notify_rx) = mpsc::channel::<notify::Result<Event>>();
+    let (event_tx, event_rx) = mpsc::channel::<notify::Result<Event>>();
 
-    let mut watcher = RecommendedWatcher::new(notify_tx, Config::default())?;
-    watcher.watch(watch_dir, RecursiveMode::Recursive)?;
+    let mut watcher = RecommendedWatcher::new(
+        move |res| {
+            let _ = event_tx.send(res);
+        },
+        notify::Config::default(),
+    )?;
+
+    watcher.watch(vault_path, RecursiveMode::Recursive)?;
 
     std::thread::spawn(move || {
         let mut last_seen: HashMap<PathBuf, Instant> = HashMap::new();
 
-        // Re-check per-path: is_transcript_event guarantees at least one transcript path,
-        // but a single notify event can carry multiple paths — only send transcript paths.
-        for event in notify_rx.into_iter().flatten() {
-            if is_transcript_event(&event) {
-                let now = Instant::now();
-                for path in &event.paths {
-                    if path
-                        .file_name()
-                        .map(|n| n == "transcript.jsonl")
-                        .unwrap_or(false)
-                    {
-                        let should_send = last_seen
-                            .get(path)
-                            .map(|last| now.duration_since(*last) >= DEBOUNCE_DURATION)
-                            .unwrap_or(true);
+        for result in event_rx {
+            let event = match result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
 
-                        if should_send {
-                            last_seen.insert(path.clone(), now);
-                            let _ = tx.send(path.clone());
-                        }
-                    }
+            let deleted = matches!(event.kind, EventKind::Remove(_));
+            let relevant = matches!(
+                event.kind,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            );
+            if !relevant {
+                continue;
+            }
+
+            for path in event.paths {
+                if !is_vault_md_event_path(&path) {
+                    continue;
                 }
+                let now = Instant::now();
+                let last = last_seen
+                    .get(&path)
+                    .copied()
+                    .unwrap_or(now - DEBOUNCE_DURATION * 2);
+                if now.duration_since(last) < DEBOUNCE_DURATION {
+                    continue;
+                }
+                last_seen.insert(path.clone(), now);
+                let _ = tx.send(VaultEvent {
+                    vault_name: vault_name.clone(),
+                    path,
+                    deleted,
+                });
             }
         }
     });
@@ -84,69 +121,26 @@ pub fn watch_sessions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{AccessKind, CreateKind, ModifyKind};
 
-    /// Helper: build a notify `Event` with the given `kind` and `paths`.
-    fn make_event(kind: EventKind, paths: Vec<PathBuf>) -> Event {
-        paths
-            .into_iter()
-            .fold(Event::new(kind), |e, p| e.add_path(p))
+    #[test]
+    fn vault_event_identifies_md_files() {
+        assert!(is_vault_md_event_path(Path::new("/vault/notes.md")));
+        assert!(is_vault_md_event_path(Path::new("/vault/subdir/entry.md")));
+        assert!(!is_vault_md_event_path(Path::new("/vault/notes.txt")));
+        assert!(!is_vault_md_event_path(Path::new("/vault/.DS_Store")));
+        assert!(!is_vault_md_event_path(Path::new("/vault/transcript.jsonl")));
     }
 
     #[test]
-    fn test_is_transcript_event_true_for_modify_transcript() {
-        let event = make_event(
-            EventKind::Modify(ModifyKind::Any),
-            vec![PathBuf::from("/sessions/abc/transcript.jsonl")],
-        );
-        assert!(
-            is_transcript_event(&event),
-            "Modify event on transcript.jsonl should return true"
-        );
+    fn vault_event_ignores_hidden_files() {
+        assert!(!is_vault_md_event_path(Path::new("/vault/.hidden.md")));
+        assert!(!is_vault_md_event_path(Path::new("/vault/.git/COMMIT_EDITMSG")));
     }
 
     #[test]
-    fn test_is_transcript_event_true_for_create_transcript() {
-        let event = make_event(
-            EventKind::Create(CreateKind::File),
-            vec![PathBuf::from("/sessions/abc/transcript.jsonl")],
-        );
-        assert!(
-            is_transcript_event(&event),
-            "Create event on transcript.jsonl should return true"
-        );
-    }
-
-    #[test]
-    fn test_is_transcript_event_false_for_non_transcript_file() {
-        let event = make_event(
-            EventKind::Modify(ModifyKind::Any),
-            vec![PathBuf::from("/sessions/abc/events.jsonl")],
-        );
-        assert!(
-            !is_transcript_event(&event),
-            "Modify event on a non-transcript file should return false"
-        );
-    }
-
-    #[test]
-    fn test_is_transcript_event_false_for_access_event() {
-        let event = make_event(
-            EventKind::Access(AccessKind::Any),
-            vec![PathBuf::from("/sessions/abc/transcript.jsonl")],
-        );
-        assert!(
-            !is_transcript_event(&event),
-            "Access event (not Modify/Create) on transcript.jsonl should return false"
-        );
-    }
-
-    #[test]
-    fn test_is_transcript_event_false_for_empty_paths() {
-        let event = make_event(EventKind::Modify(ModifyKind::Any), vec![]);
-        assert!(
-            !is_transcript_event(&event),
-            "Modify event with no paths should return false"
-        );
+    fn conflict_copies_excluded_from_watch() {
+        assert!(!is_vault_md_event_path(Path::new(
+            "/vault/note.conflict-2026-04-26-120000.md"
+        )));
     }
 }
