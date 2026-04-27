@@ -97,7 +97,7 @@ enum Commands {
         #[arg(long, default_value = "context")]
         format: String,
     },
-    /// Watch ~/.amplifier/projects for new session transcripts and process them automatically
+    /// Watch configured vaults for *.md changes and incrementally update the search index
     Daemon,
     /// Start the MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
     Mcp,
@@ -277,7 +277,12 @@ fn main() {
             api_key,
         } => run_observe(&session_path, api_key.as_deref()),
         Commands::Load { format } => run_load(&format),
-        Commands::Daemon => run_daemon(),
+        Commands::Daemon => {
+            if let Err(e) = run_daemon() {
+                eprintln!("engram: daemon error: {e}");
+                std::process::exit(1);
+            }
+        }
         Commands::Mcp => run_mcp(),
         Commands::Install => run_install(),
         Commands::Uninstall => run_uninstall(),
@@ -1682,87 +1687,100 @@ fn search_index_status(search_dir: &Path) -> String {
     }
 }
 
-/// Watch `~/.amplifier/projects` for session transcript changes and process them automatically.
-fn run_daemon() {
-    use daemon::watch_sessions;
+/// Watch configured vaults for *.md file changes and incrementally update the search index.
+fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::daemon::{watch_vault, VaultEvent};
     use std::sync::mpsc;
 
-    // Resolve the vault encryption key.
-    let key = match resolve_vault_key() {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("Cannot access vault key: {}", e);
-            eprintln!("Tip: run `engram init` to set up the vault");
-            std::process::exit(1);
-        }
-    };
+    let config = EngramConfig::load();
 
-    // Determine the watch directory: ~/.amplifier/projects
-    let watch_dir = UserDirs::new()
-        .map(|u| u.home_dir().join(".amplifier/projects"))
-        .unwrap_or_else(|| PathBuf::from(".amplifier/projects"));
-
-    // Create the watch directory if it doesn't exist.
-    if let Err(e) = std::fs::create_dir_all(&watch_dir) {
-        eprintln!(
-            "Failed to create watch directory {}: {}",
-            watch_dir.display(),
-            e
-        );
-        std::process::exit(1);
+    if config.vaults.is_empty() {
+        eprintln!("engram: no vaults configured. Run 'engram init' first.");
+        return Ok(());
     }
 
-    // Read ANTHROPIC_API_KEY from environment; warn if empty but continue.
-    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    if api_key.is_empty() {
-        eprintln!("Warning: ANTHROPIC_API_KEY is not set. Transcripts will be watched but facts cannot be extracted.");
-    }
+    println!("engram daemon starting — watching {} vault(s)", config.vaults.len());
 
-    // Create channel for transcript path events.
-    let (tx, rx) = mpsc::channel::<PathBuf>();
+    let (tx, rx) = mpsc::channel::<VaultEvent>();
 
-    // Start the file watcher.
-    let _watcher = match watch_sessions(&watch_dir, tx) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to start file watcher: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!("engram daemon started. Watching: {}", watch_dir.display());
-
-    // Open the memory store for writing extracted facts.
-    let store_path = default_store_path();
-    let store = match MemoryStore::open(&store_path, &key) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to open memory store: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Block on the channel receiver; process each transcript as it arrives.
-    for transcript_path in rx {
-        eprintln!("Processing: {}", transcript_path.display());
-
-        if api_key.is_empty() {
-            eprintln!("Skipping fact extraction: ANTHROPIC_API_KEY is not set.");
+    // Start a watcher for each configured vault
+    let mut watchers = Vec::new();
+    for (name, vault) in &config.vaults {
+        if !vault.path.exists() {
+            eprintln!("  skipping vault '{name}': path does not exist ({})", vault.path.display());
             continue;
         }
-
-        match observe::observe_session(&transcript_path, &store, &api_key) {
-            Ok(stats) => {
-                eprintln!(
-                    "Extracted: {} facts, Written: {} facts from {}",
-                    stats.facts_extracted, stats.facts_written, stats.session_path
-                );
+        match watch_vault(name.clone(), &vault.path, tx.clone()) {
+            Ok(w) => {
+                println!("  watching vault '{name}': {}", vault.path.display());
+                watchers.push(w);
             }
-            Err(e) => {
-                eprintln!("Error processing {}: {}", transcript_path.display(), e);
-            }
+            Err(e) => eprintln!("  failed to watch vault '{name}': {e}"),
         }
     }
+
+    if watchers.is_empty() {
+        eprintln!("engram: no vaults could be watched. Exiting.");
+        return Ok(());
+    }
+
+    // Handle SIGTERM/SIGINT for clean shutdown
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let running = running.clone();
+        let _ = ctrlc::set_handler(move || {
+            println!("\nengram daemon shutting down...");
+            running.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    // Event loop
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(event) => {
+                if event.deleted {
+                    eprintln!("  [{}] deleted: {}", event.vault_name, event.path.display());
+                    // TODO(Phase 4): trigger sync delete for auto-mode vaults
+                } else {
+                    eprintln!("  [{}] changed: {}", event.vault_name, event.path.display());
+                    // Incremental search index update
+                    if let Some(vault) = config.vaults.get(&event.vault_name) {
+                        if let Err(e) = index_single_file(&vault.path, &event.path, &event.vault_name) {
+                            eprintln!("  index error for {}: {e}", event.path.display());
+                        }
+                        // TODO(Phase 4): trigger debounced auto-sync for auto-mode vaults
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Normal — check running flag and loop
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    println!("engram daemon stopped.");
+    Ok(())
+}
+
+/// Index a single vault file incrementally in the Tantivy search index.
+/// Called by the daemon when a *.md file changes. Skips silently if no
+/// search index exists yet (user hasn't run `engram index`).
+fn index_single_file(
+    _vault_path: &std::path::Path,
+    file_path: &std::path::Path,
+    vault_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let search_dir = vault_storage_dir(vault_name).join("search");
+    // Only index if a search index already exists; don't create one on-the-fly.
+    if !search_dir.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(file_path)?;
+    let path_str = file_path.to_string_lossy();
+    let mut indexer = TantivyIndexer::open(&search_dir)?;
+    indexer.index_file(&path_str, &content)?;
+    Ok(())
 }
 
 /// Install the engram daemon as a system service.
@@ -2793,6 +2811,42 @@ mod doctor_tests {
         assert!(
             known_prefixes.iter().any(|&p| status.starts_with(p)),
             "unexpected daemon status: {status}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod daemon_integration_tests {
+    #[test]
+    fn daemon_config_reads_all_vaults() {
+        let source = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")
+        ).unwrap();
+
+        // Check only non-test source to avoid self-referential false positives.
+        // The test module itself may contain the forbidden strings as string literals.
+        let non_test_source = source
+            .rfind("\n#[cfg(test)]\nmod daemon_integration_tests")
+            .map(|i| &source[..i])
+            .unwrap_or(&source);
+
+        let forbidden = ['.', 'a', 'm', 'p', 'l', 'i', 'f', 'i', 'e', 'r', '/', 'p', 'r', 'o', 'j', 'e', 'c', 't', 's'].iter().collect::<String>();
+        assert!(
+            !non_test_source.contains(&*forbidden),
+            "run_daemon should not reference the old amplifier projects path"
+        );
+
+        // Scope the observe_session check to the run_daemon function body only.
+        // run_observe() is intentionally kept and may call observe_session — that's fine.
+        let daemon_start = non_test_source.find("fn run_daemon(").expect("run_daemon not found");
+        let daemon_end = non_test_source[daemon_start + 1..]
+            .find("\nfn ")
+            .map(|i| daemon_start + 1 + i)
+            .unwrap_or(non_test_source.len());
+        let daemon_body = &non_test_source[daemon_start..daemon_end];
+        assert!(
+            !daemon_body.contains("observe_session"),
+            "run_daemon should not call observe_session"
         );
     }
 }
