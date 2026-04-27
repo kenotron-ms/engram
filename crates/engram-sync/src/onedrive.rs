@@ -69,6 +69,14 @@ impl OneDriveBackend {
         format!("{}/{}", self.folder.trim_end_matches('/'), path)
     }
 
+    /// Returns `true` if a refresh token is configured on this backend.
+    ///
+    /// Useful in tests and diagnostics to verify that the call site wired
+    /// the refresh token from credentials rather than dropping it.
+    pub fn has_refresh_token(&self) -> bool {
+        self.tokens.lock().unwrap().refresh_token.is_some()
+    }
+
     /// Build the Graph API URL for file content operations.
     pub(crate) fn item_url(&self, path: &str) -> String {
         format!("{}{}:/content", GRAPH_DRIVE_ROOT, self.full_path(path))

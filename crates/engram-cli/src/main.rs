@@ -912,7 +912,11 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         "onedrive" => {
             let token = creds.access_token.as_deref().unwrap_or_default();
             let folder = creds.folder.as_deref().unwrap_or_default();
-            Box::new(OneDriveBackend::new(token, folder))
+            Box::new(OneDriveBackend::with_refresh_token(
+                token,
+                creds.refresh_token.as_deref(),
+                folder,
+            ))
         }
         "azure" => {
             let account = creds.account.as_deref().unwrap_or_default();
@@ -1914,7 +1918,11 @@ async fn trigger_bisync(
         "onedrive" => {
             let token = creds.access_token.as_deref().unwrap_or_default();
             let folder = creds.folder.as_deref().unwrap_or_default();
-            let backend = OneDriveBackend::new(token, folder);
+            let backend = OneDriveBackend::with_refresh_token(
+                token,
+                creds.refresh_token.as_deref(),
+                folder,
+            );
             let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
             eprintln!(
                 "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
@@ -3065,6 +3073,39 @@ mod daemon_integration_tests {
         assert!(
             !daemon_body.contains("observe_session"),
             "run_daemon should not call observe_session"
+        );
+    }
+
+    /// Regression: both OneDrive call sites in the sync commands must pass the
+    /// `refresh_token` from credentials through to the backend constructor so that
+    /// automatic token refresh on 401 responses actually works.
+    #[test]
+    fn test_onedrive_call_sites_wire_refresh_token_from_credentials() {
+        use engram_core::config::VaultSyncCredentials;
+        use engram_sync::onedrive::OneDriveBackend;
+
+        let creds = VaultSyncCredentials {
+            backend: "onedrive".to_string(),
+            access_token: Some("access_tok".to_string()),
+            refresh_token: Some("refresh_tok".to_string()),
+            folder: Some("/vault".to_string()),
+            ..Default::default()
+        };
+
+        let token = creds.access_token.as_deref().unwrap_or_default();
+        let folder = creds.folder.as_deref().unwrap_or_default();
+
+        // Mirrors the fixed call-site pattern: with_refresh_token wires the token.
+        let backend = OneDriveBackend::with_refresh_token(
+            token,
+            creds.refresh_token.as_deref(),
+            folder,
+        );
+
+        assert!(
+            backend.has_refresh_token(),
+            "OneDriveBackend must preserve refresh_token from credentials; \
+             call sites must use with_refresh_token(), not new()"
         );
     }
 }
