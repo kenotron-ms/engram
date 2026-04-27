@@ -40,18 +40,29 @@ pub fn systemd_user_dir() -> Option<PathBuf> {
 /// Returns the `~/.engram` directory for daemon logs.
 fn engram_log_dir() -> PathBuf {
     home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
+        .unwrap_or_else(|| {
+            // $HOME not set — use /tmp as last resort; launchd/systemd don't expand ~
+            PathBuf::from("/tmp")
+        })
         .join(".engram")
 }
 
 /// Returns the path of the current running executable, canonicalized.
 fn current_exe_path() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.canonicalize().ok())
-        .unwrap_or_else(|| PathBuf::from("engram"))
+    let raw = std::env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from("engram"));
+    raw.canonicalize()
+        .unwrap_or(raw) // keep raw absolute path if canonicalize fails
         .to_string_lossy()
         .to_string()
+}
+
+/// Returns the current user's UID, used to construct launchd domain strings.
+#[cfg(target_os = "macos")]
+fn current_uid() -> u32 {
+    // SAFETY: getuid(2) has no preconditions, always succeeds, and is
+    // signal-safe. Documented in POSIX as always returning a valid uid_t.
+    unsafe { libc::getuid() }
 }
 
 /// Returns the current `PATH` environment variable.
@@ -134,7 +145,7 @@ pub fn install_service() -> Result<(), InstallError> {
         let plist_path = dir.join("com.engram.daemon.plist");
         std::fs::write(&plist_path, build_macos_plist())?;
 
-        let uid = unsafe { libc::getuid() };
+        let uid = current_uid();
         let domain = format!("gui/{uid}");
         let status = std::process::Command::new("launchctl")
             .args(["bootstrap", &domain, &plist_path.to_string_lossy()])
@@ -207,7 +218,7 @@ pub fn uninstall_service() -> Result<(), InstallError> {
         let plist_path = dir.join("com.engram.daemon.plist");
 
         // Best-effort bootout (ignore errors if service was never loaded).
-        let uid = unsafe { libc::getuid() };
+        let uid = current_uid();
         let domain = format!("gui/{uid}");
         let _ = std::process::Command::new("launchctl")
             .args(["bootout", &domain, &plist_path.to_string_lossy()])
@@ -260,6 +271,8 @@ mod tests {
         let plist = build_macos_plist();
         let exe = std::env::current_exe()
             .unwrap()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().unwrap())
             .to_string_lossy()
             .to_string();
         assert!(
@@ -280,6 +293,8 @@ mod tests {
         let unit = build_linux_unit();
         let exe = std::env::current_exe()
             .unwrap()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().unwrap())
             .to_string_lossy()
             .to_string();
         assert!(
