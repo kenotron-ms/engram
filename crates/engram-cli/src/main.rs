@@ -1797,9 +1797,9 @@ fn daemon_service_status() -> String {
         match out {
             Ok(o) if o.status.success() => {
                 let text = String::from_utf8_lossy(&o.stdout);
-                // launchctl list output: first field is PID (number) or "-" (not running)
-                let first_field = text.split_whitespace().next().unwrap_or("-");
-                if first_field != "-" {
+                // `launchctl list <label>` returns a plist dict on macOS 10.10+.
+                // The "PID" key is present only when the process is actually running.
+                if text.contains("\"PID\"") {
                     "running".to_string()
                 } else {
                     "installed (not running)".to_string()
@@ -1889,8 +1889,8 @@ fn run_doctor() {
     println!("Daemon:            {svc_icon} {svc}");
 
     // ── sync.key file ─────────────────────────────────────────────────────────
-    let key_path = UserDirs::new()
-        .map(|u| u.home_dir().join(".engram").join("sync.key"))
+    let key_path = install::home_dir()
+        .map(|h| h.join(".engram").join("sync.key"))
         .unwrap_or_else(|| PathBuf::from(".engram/sync.key"));
     if key_path.exists() {
         println!("sync.key:          ✓ present");
@@ -1902,8 +1902,8 @@ fn run_doctor() {
     println!("{}", search_index_status(&default_search_dir()));
 
     // ── Sync credentials ─────────────────────────────────────────────────────
-    let creds_path = UserDirs::new()
-        .map(|u| u.home_dir().join(".engram").join("credentials"))
+    let creds_path = install::home_dir()
+        .map(|h| h.join(".engram").join("credentials"))
         .unwrap_or_else(|| PathBuf::from(".engram/credentials"));
     if creds_path.exists() {
         println!("Sync credentials:  ✓ configured");
@@ -2711,8 +2711,20 @@ mod tests {
 #[cfg(test)]
 mod doctor_tests {
     #[test]
-    fn daemon_status_returns_string() {
+    fn daemon_status_returns_a_known_state() {
         let status = super::daemon_service_status();
-        assert!(!status.is_empty());
+        let known_prefixes = [
+            "running",
+            "installed",
+            "not installed",
+            "active",
+            "inactive",
+            "unknown",
+            "not supported",
+        ];
+        assert!(
+            known_prefixes.iter().any(|&p| status.starts_with(p)),
+            "unexpected daemon status: {status}"
+        );
     }
 }
