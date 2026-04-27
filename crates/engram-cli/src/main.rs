@@ -1759,12 +1759,31 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Handle SIGTERM/SIGINT for clean shutdown — must be created before the pull thread
+    // so we can clone the flag into it.
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let r = running.clone();
+        let _ = ctrlc::set_handler(move || {
+            println!("\nengram daemon shutting down...");
+            r.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
     // Pull loop: background thread fires every 5 minutes for SyncMode::Auto vaults.
+    // Sleeps in 1-second increments so it can honour the `running` shutdown flag promptly.
     let config_for_pull = config.clone();
-    std::thread::spawn(move || {
+    let running_for_pull = running.clone();
+    let pull_handle = std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(300));
+            // ~5 minutes in 1-second ticks, bailing out early on shutdown.
+            for _ in 0..300 {
+                if !running_for_pull.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
             rt.block_on(async {
                 for (name, vault) in &config_for_pull.vaults {
                     if vault.sync_mode != SyncMode::Auto {
@@ -1779,17 +1798,11 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Handle SIGTERM/SIGINT for clean shutdown
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-    {
-        let running = running.clone();
-        let _ = ctrlc::set_handler(move || {
-            println!("\nengram daemon shutting down...");
-            running.store(false, std::sync::atomic::Ordering::SeqCst);
-        });
-    }
-
     // Debounce map: vault_name → last event time, used for SyncMode::Auto upload trigger.
+    // The runtime is created once here and reused for every debounce flush — creating a
+    // fresh Runtime inside the `for name in ready` loop would spin up a new thread pool
+    // on every flush, which is expensive.
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for auto-sync");
     let mut sync_pending: std::collections::HashMap<String, std::time::Instant> =
         std::collections::HashMap::new();
     let sync_debounce = std::time::Duration::from_secs(10);
@@ -1828,7 +1841,6 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
                     sync_pending.remove(&name);
                     if let Some(vault) = config.vaults.get(&name) {
                         let state_path = engram_bisync_state_path(&name);
-                        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
                         if let Err(e) = rt.block_on(trigger_bisync(&name, vault, &state_path)) {
                             eprintln!("  auto-sync error for '{name}': {e}");
                         }
@@ -1840,6 +1852,7 @@ fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("engram daemon stopped.");
+    pull_handle.join().ok(); // wait for the pull loop to finish any in-progress sync
     Ok(())
 }
 
