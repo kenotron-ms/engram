@@ -38,7 +38,7 @@ pub fn systemd_user_dir() -> Option<PathBuf> {
 }
 
 /// Returns the `~/.engram` directory for daemon logs.
-fn engram_log_dir() -> PathBuf {
+pub fn engram_log_dir() -> PathBuf {
     home_dir()
         .unwrap_or_else(|| {
             // $HOME not set — use /tmp as last resort; launchd/systemd don't expand ~

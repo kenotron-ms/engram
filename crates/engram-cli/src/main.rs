@@ -1767,6 +1767,14 @@ fn run_daemon() {
 
 /// Install the engram daemon as a system service.
 fn run_install() {
+    // Ensure ~/.engram/ exists before install_service() calls launchctl bootstrap,
+    // which fires the daemon immediately (RunAtLoad=true). Without this, the daemon's
+    // first-launch logs are silently dropped because the log directory doesn't exist yet.
+    let log_dir = install::engram_log_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("  ! Could not create log directory {}: {e}", log_dir.display());
+    }
+
     match install::install_service() {
         Ok(()) => println!("\u{2713} engram daemon service installed"),
         Err(e) => {
@@ -1934,9 +1942,7 @@ fn run_doctor() {
     println!("Daemon:            {svc_icon} {svc}");
 
     // ── sync.key file ─────────────────────────────────────────────────────────
-    let key_path = install::home_dir()
-        .map(|h| h.join(".engram").join("sync.key"))
-        .unwrap_or_else(|| PathBuf::from(".engram/sync.key"));
+    let key_path = EngramConfig::sync_key_path();
     if key_path.exists() {
         println!("sync.key:          ✓ present");
     } else {
@@ -2337,14 +2343,20 @@ mod tests {
     #[test]
     #[serial]
     fn test_default_store_path_ends_with_engram_memory_db() {
-        // Remove the env var first so the fallback path is tested deterministically.
+        let dir = tempfile::TempDir::new().unwrap();
+        let empty_config = dir.path().join("empty-config.toml");
+        std::env::set_var("ENGRAM_CONFIG_PATH", empty_config.to_str().unwrap());
         std::env::remove_var("ENGRAM_STORE_PATH");
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
+
         let path = default_store_path();
-        let path_str = path.to_string_lossy();
+
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
         assert!(
-            path_str.ends_with(".engram/memory.db"),
+            path.to_string_lossy().ends_with(".engram/memory.db")
+                || path.to_string_lossy().ends_with(".engram\\memory.db"),
             "store path should end with .engram/memory.db, got: {}",
-            path_str
+            path.display()
         );
     }
 
