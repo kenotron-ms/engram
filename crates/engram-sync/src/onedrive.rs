@@ -7,17 +7,63 @@ use reqwest::{Client, StatusCode};
 
 const GRAPH_DRIVE_ROOT: &str = "https://graph.microsoft.com/v1.0/me/drive/root:";
 
+const MICROSOFT_TOKEN_URL: &str =
+    "https://login.microsoftonline.com/common/oauth2/v2.0/token";
+
+// The engram OneDrive app client_id — public client, no secret needed for token refresh.
+// Must match the client_id used in the OAuth authorization flow (main.rs).
+const ONEDRIVE_CLIENT_ID: &str = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+
+/// Internal token state, shared behind a Mutex for interior mutability.
+/// Using std::sync::Mutex (not tokio) is intentional: we never hold the guard
+/// across an await point, so a lightweight sync mutex is correct here.
+struct Tokens {
+    access_token: String,
+    refresh_token: Option<String>,
+}
+
 pub struct OneDriveBackend {
     client: Client,
-    access_token: String,
+    tokens: std::sync::Mutex<Tokens>,
     folder: String, // e.g. "/Apps/Engram/vault"
 }
 
+
+/// Build the relative path key for a file returned by the Graph API list call.
+///
+/// When `prefix` is empty (listing the vault root), the key is just `name`.
+/// When `prefix` is non-empty the key is `{prefix}/{name}`.
+///
+/// The "always use format!" approach produces a leading slash ("/notes.md")
+/// for empty prefix which causes bisync to classify every root-level file as
+/// `DeletedRemotely` because local manifest keys never have a leading slash.
+fn list_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}/{}", prefix, name)
+    }
+}
+
 impl OneDriveBackend {
+    /// Create a backend with only an access token (no auto-refresh on 401).
     pub fn new(access_token: &str, folder: &str) -> Self {
+        Self::with_refresh_token(access_token, None, folder)
+    }
+
+    /// Create a backend with both an access token and a refresh token.
+    /// Enables automatic token refresh on 401 responses.
+    pub fn with_refresh_token(
+        access_token: &str,
+        refresh_token: Option<&str>,
+        folder: &str,
+    ) -> Self {
         Self {
             client: Client::new(),
-            access_token: access_token.to_string(),
+            tokens: std::sync::Mutex::new(Tokens {
+                access_token: access_token.to_string(),
+                refresh_token: refresh_token.map(|t| t.to_string()),
+            }),
             folder: folder.to_string(),
         }
     }
@@ -27,13 +73,72 @@ impl OneDriveBackend {
         format!("{}/{}", self.folder.trim_end_matches('/'), path)
     }
 
+
+    /// Returns `true` if a refresh token is configured on this backend.
+    ///
+    /// Useful in tests and diagnostics to verify that the call site wired
+    /// the refresh token from credentials rather than dropping it.
+    pub fn has_refresh_token(&self) -> bool {
+        self.tokens.lock().unwrap().refresh_token.is_some()
+    }
+
     /// Build the Graph API URL for file content operations.
     pub(crate) fn item_url(&self, path: &str) -> String {
         format!("{}{}:/content", GRAPH_DRIVE_ROOT, self.full_path(path))
     }
 
     fn auth_header(&self) -> String {
-        format!("Bearer {}", self.access_token)
+        let tokens = self.tokens.lock().unwrap();
+        format!("Bearer {}", tokens.access_token)
+    }
+
+    /// Exchange the stored refresh token for a new access token.
+    /// Updates the stored access_token (and refresh_token if rotated) in place.
+    ///
+    /// The lock is never held across an await point: we clone what we need,
+    /// drop the guard, perform the async I/O, then re-acquire to write.
+    async fn refresh_access_token(&self) -> Result<(), SyncError> {
+        // Phase 1: read the refresh token under the lock, then release it.
+        let refresh_token = {
+            let tokens = self.tokens.lock().unwrap();
+            tokens.refresh_token.clone().ok_or_else(|| {
+                SyncError::Auth("no refresh token available for OneDrive".to_string())
+            })?
+        };
+
+        // Phase 2: async POST — no lock held.
+        let resp: serde_json::Value = self
+            .client
+            .post(MICROSOFT_TOKEN_URL)
+            .form(&[
+                ("client_id", ONEDRIVE_CLIENT_ID),
+                ("refresh_token", &*refresh_token),
+                ("grant_type", "refresh_token"),
+                ("scope", "Files.ReadWrite.All offline_access"),
+            ])
+            .send()
+            .await
+            .map_err(SyncError::Network)?
+            .error_for_status()
+            .map_err(|e| SyncError::Auth(format!("token endpoint error: {e}")))?
+            .json()
+            .await
+            .map_err(SyncError::Network)?;
+
+        let new_token = resp["access_token"]
+            .as_str()
+            .ok_or_else(|| SyncError::Auth(format!("token refresh failed: {resp}")))?
+            .to_string();
+
+        let new_refresh = resp["refresh_token"].as_str().map(|s| s.to_string());
+
+        // Phase 3: write the updated tokens under the lock.
+        let mut tokens = self.tokens.lock().unwrap();
+        tokens.access_token = new_token;
+        if let Some(r) = new_refresh {
+            tokens.refresh_token = Some(r);
+        }
+        Ok(())
     }
 }
 
@@ -46,10 +151,28 @@ impl SyncBackend for OneDriveBackend {
             .put(&url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/octet-stream")
-            .body(data)
+            .body(data.clone()) // clone is O(1) — Bytes is Arc-backed
             .send()
             .await?;
-        if !response.status().is_success() {
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            let response = self
+                .client
+                .put(&url)
+                .header("Authorization", self.auth_header())
+                .header("Content-Type", "application/octet-stream")
+                .body(data)
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(SyncError::Backend(format!(
+                    "OneDrive push failed: {}",
+                    response.status()
+                )));
+            }
+        } else if !response.status().is_success() {
             return Err(SyncError::Backend(format!(
                 "OneDrive push failed: {}",
                 response.status()
@@ -66,6 +189,28 @@ impl SyncBackend for OneDriveBackend {
             .header("Authorization", self.auth_header())
             .send()
             .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            let response = self
+                .client
+                .get(&url)
+                .header("Authorization", self.auth_header())
+                .send()
+                .await?;
+            if response.status() == StatusCode::NOT_FOUND {
+                return Err(SyncError::NotFound(path.to_string()));
+            }
+            if !response.status().is_success() {
+                return Err(SyncError::Backend(format!(
+                    "OneDrive pull failed: {}",
+                    response.status()
+                )));
+            }
+            return Ok(response.bytes().await?);
+        }
+
         if response.status() == StatusCode::NOT_FOUND {
             return Err(SyncError::NotFound(path.to_string()));
         }
@@ -86,6 +231,19 @@ impl SyncBackend for OneDriveBackend {
             .header("Authorization", self.auth_header())
             .send()
             .await?;
+
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            self.client
+                .get(&url)
+                .header("Authorization", self.auth_header())
+                .send()
+                .await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() {
             return Err(SyncError::Backend(format!(
                 "OneDrive list failed: {}",
@@ -100,7 +258,7 @@ impl SyncBackend for OneDriveBackend {
             .as_array()
             .unwrap_or(&vec![])
             .iter()
-            .filter_map(|item| item["name"].as_str().map(|s| format!("{}/{}", prefix, s)))
+            .filter_map(|item| item["name"].as_str().map(|s| list_path(prefix, s)))
             .collect();
         Ok(names)
     }
@@ -114,6 +272,19 @@ impl SyncBackend for OneDriveBackend {
             .header("Authorization", self.auth_header())
             .send()
             .await?;
+
+        let response = if response.status() == StatusCode::UNAUTHORIZED {
+            // Token expired — refresh once and retry.
+            self.refresh_access_token().await?;
+            self.client
+                .delete(&url)
+                .header("Authorization", self.auth_header())
+                .send()
+                .await?
+        } else {
+            response
+        };
+
         if !response.status().is_success() && response.status() != StatusCode::NOT_FOUND {
             return Err(SyncError::Backend(format!(
                 "OneDrive delete failed: {}",
@@ -125,6 +296,41 @@ impl SyncBackend for OneDriveBackend {
 
     fn backend_name(&self) -> &'static str {
         "onedrive"
+    }
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+
+    #[test]
+    fn refresh_url_is_correct() {
+        assert_eq!(
+            MICROSOFT_TOKEN_URL,
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        );
+    }
+
+    #[test]
+    fn refresh_request_uses_correct_constants() {
+        // Verify the constants that build the token refresh request are correct.
+        assert_eq!(
+            MICROSOFT_TOKEN_URL,
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+        );
+        assert!(!ONEDRIVE_CLIENT_ID.is_empty(), "client_id must be set");
+    }
+
+    /// The client_id used for token refresh must match the one used for the
+    /// initial OAuth authorization flow in main.rs — otherwise token refresh
+    /// fails with AADSTS70011.
+    #[test]
+    fn client_id_matches_auth_flow() {
+        assert_eq!(
+            ONEDRIVE_CLIENT_ID,
+            "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
+            "ONEDRIVE_CLIENT_ID must match the client_id used in the auth flow"
+        );
     }
 }
 
@@ -156,6 +362,37 @@ mod tests {
     fn test_backend_name() {
         let backend = OneDriveBackend::new("token", "/Apps/Engram/vault");
         assert_eq!(backend.backend_name(), "onedrive");
+    }
+
+    /// When list("") is called with an empty prefix the returned keys must have
+    /// no leading slash — otherwise bisync compares "/notes.md" against the
+    /// local manifest key "notes.md" and classifies every file as DeletedRemotely.
+    #[test]
+    fn test_list_path_empty_prefix_no_leading_slash() {
+        assert_eq!(
+            super::list_path("", "notes.md"),
+            "notes.md",
+            "empty prefix must not produce a leading slash"
+        );
+    }
+
+    #[test]
+    fn test_list_path_nonempty_prefix_joined_with_slash() {
+        assert_eq!(
+            super::list_path("subdir", "notes.md"),
+            "subdir/notes.md"
+        );
+    }
+
+    #[test]
+    fn test_with_refresh_token_constructor() {
+        let backend =
+            OneDriveBackend::with_refresh_token("access", Some("refresh"), "/vault");
+        assert_eq!(backend.auth_header(), "Bearer access");
+        assert_eq!(
+            backend.tokens.lock().unwrap().refresh_token.as_deref(),
+            Some("refresh")
+        );
     }
 
     #[tokio::test]

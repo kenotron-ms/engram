@@ -283,6 +283,74 @@ impl EngramConfig {
         }
         true
     }
+
+    /// Path to the sync key file — the engram equivalent of ~/.ssh/id_rsa.
+    /// Override with ENGRAM_SYNC_KEY_PATH env var (useful for testing).
+    pub fn sync_key_path() -> std::path::PathBuf {
+        if let Ok(override_path) = std::env::var("ENGRAM_SYNC_KEY_PATH") {
+            return std::path::PathBuf::from(override_path);
+        }
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".engram")
+            .join("sync.key")
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sync key file helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Write a 32-byte sync key to disk as base64, chmod 600.
+///
+/// Sets restrictive permissions BEFORE writing content to prevent
+/// the window where the file exists with world-readable permissions.
+pub fn write_sync_key_file(
+    path: &std::path::Path,
+    key: &[u8; 32],
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(key);
+        file.write_all(encoded.as_bytes())?;
+        file.write_all(b"\n")?;
+    }
+    #[cfg(not(unix))]
+    {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(key);
+        std::fs::write(path, format!("{encoded}\n"))?;
+    }
+
+    Ok(())
+}
+
+/// Read a 32-byte sync key from the key file.
+/// Returns an error if the file is missing, corrupt, or not exactly 32 bytes.
+pub fn read_sync_key_file(
+    path: &std::path::Path,
+) -> Result<[u8; 32], Box<dyn std::error::Error + Send + Sync>> {
+    use base64::Engine;
+    let contents = std::fs::read_to_string(path)?;
+    let decoded = base64::engine::general_purpose::STANDARD.decode(contents.trim())?;
+    decoded
+        .try_into()
+        .map_err(|_| "sync.key: expected 32 bytes — file may be corrupt".into())
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -798,5 +866,75 @@ default = false
             !toml_str.contains("\nsync ") && !toml_str.contains("\nsync="),
             "VaultEntry TOML should not contain a 'sync' key:\n{toml_str}"
         );
+    }
+}
+
+#[cfg(test)]
+mod sync_key_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // Serialise tests that mutate ENGRAM_SYNC_KEY_PATH in the process environment.
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    /// ENGRAM_SYNC_KEY_PATH env var must override the default ~/.engram/sync.key path.
+    #[test]
+    fn sync_key_path_respects_env_var_override() {
+        let _guard = env_lock();
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/tmp/engram-test-override.key");
+        let path = EngramConfig::sync_key_path();
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/tmp/engram-test-override.key"),
+            "EngramConfig::sync_key_path() should respect ENGRAM_SYNC_KEY_PATH env var override"
+        );
+    }
+
+    #[test]
+    fn write_then_read_key_file_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        let key_path = dir.path().join("sync.key");
+        let key: [u8; 32] = [0xAB; 32];
+
+        write_sync_key_file(&key_path, &key).unwrap();
+        let loaded: [u8; 32] = read_sync_key_file(&key_path).unwrap();
+
+        assert_eq!(key, loaded);
+    }
+
+    #[test]
+    fn key_file_written_with_restrictive_permissions() {
+        let dir = TempDir::new().unwrap();
+        let key_path = dir.path().join("sync.key");
+        let key: [u8; 32] = [0x01; 32];
+
+        write_sync_key_file(&key_path, &key).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&key_path).unwrap().permissions();
+            assert_eq!(
+                perms.mode() & 0o777,
+                0o600,
+                "sync.key must be chmod 600"
+            );
+        }
+    }
+
+    #[test]
+    fn key_file_not_world_readable_before_write() {
+        let dir = TempDir::new().unwrap();
+        let key_path = dir.path().join("sync.key");
+        let result = write_sync_key_file(&key_path, &[0u8; 32]);
+        assert!(result.is_ok());
     }
 }

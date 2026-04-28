@@ -38,7 +38,7 @@ pub struct FileEntry {
 }
 
 /// Persistent manifest of what has been successfully synced.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SyncManifest {
     /// relative_path → FileEntry
     pub files: HashMap<String, FileEntry>,
@@ -132,5 +132,217 @@ impl SyncManifest {
             .duration_since(UNIX_EPOCH)
             .map(|d| (d.as_secs(), d.subsec_nanos()))
             .unwrap_or((0, 0))
+    }
+}
+
+/// Remote file metadata (from cloud listing).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RemoteFileEntry {
+    pub size: u64,
+    pub mtime_secs: u64,
+    pub etag: Option<String>,
+}
+
+/// Persistent bisync state stored at ~/.engram/<vault>/bisync-state.json.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BiSyncState {
+    /// Snapshot of local+remote state at last successful sync — the "common ancestor"
+    pub baseline: SyncManifest,
+    /// Last-known remote file listing (refreshed at start of each bisync)
+    pub remote: HashMap<String, RemoteFileEntry>,
+}
+
+impl BiSyncState {
+    pub fn load(state_path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(state_path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => {
+                eprintln!("engram: bisync-state unreadable at {}, starting fresh: {e}", state_path.display());
+                Self::default()
+            }
+            Ok(s) => match serde_json::from_str(&s) {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!("engram: bisync-state corrupt at {}, starting fresh (backup recommended): {e}", state_path.display());
+                    Self::default()
+                }
+            },
+        }
+    }
+
+    pub fn save(&self, state_path: &std::path::Path) -> std::io::Result<()> {
+        // Ensure parent directory exists (first bisync on a fresh vault has no state dir yet).
+        if let Some(parent) = state_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = state_path.with_extension("tmp");
+        let json = serde_json::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })?;
+        std::fs::write(&tmp, json)?;
+        std::fs::rename(&tmp, state_path)
+    }
+}
+
+/// What changed for a single file during bisync classification.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileChange {
+    pub path: String,
+    pub kind: ChangeKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChangeKind {
+    LocalOnly,
+    RemoteOnly,
+    Conflict { local_mtime: u64, remote_mtime: u64 },
+    DeletedLocally,
+    DeletedRemotely,
+    NewLocal,
+    NewRemote,
+}
+
+/// Classify all files across local manifest, remote listing, and baseline.
+pub fn classify_changes(
+    baseline: &SyncManifest,
+    local: &SyncManifest,
+    remote: &HashMap<String, RemoteFileEntry>,
+) -> Vec<FileChange> {
+    let mut changes = Vec::new();
+    let all_paths: std::collections::HashSet<&String> = baseline.files.keys()
+        .chain(local.files.keys())
+        .chain(remote.keys())
+        .collect();
+
+    for path in all_paths {
+        let in_local = local.files.get(path);
+        let in_remote = remote.get(path);
+
+        let local_changed = match (baseline.files.get(path), in_local) {
+            (Some(b), Some(l)) => b.hash != l.hash,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        let remote_changed = match (baseline.files.get(path), in_remote) {
+            (Some(b), Some(r)) => b.size != r.size || b.mtime_secs != r.mtime_secs,
+            (None, Some(_)) => true,
+            (Some(_), None) => true,
+            (None, None) => false,
+        };
+
+        let in_baseline = baseline.files.contains_key(path);
+
+        let kind = match (in_baseline, in_local, in_remote, local_changed, remote_changed) {
+            (false, Some(_), None, _, _) => ChangeKind::NewLocal,
+            (false, None, Some(_), _, _) => ChangeKind::NewRemote,
+            (true, None, Some(_), _, _) => ChangeKind::DeletedLocally,
+            (true, Some(_), None, _, _) => ChangeKind::DeletedRemotely,
+            (_, Some(l), Some(r), true, true) => ChangeKind::Conflict {
+                local_mtime: l.mtime_secs,
+                remote_mtime: r.mtime_secs,
+            },
+            (_, _, _, true, false) => ChangeKind::LocalOnly,
+            (_, _, _, false, true) => ChangeKind::RemoteOnly,
+            // Both sides unchanged, or both sides deleted — nothing to do
+            _ => continue,
+        };
+
+        changes.push(FileChange { path: path.clone(), kind });
+    }
+
+    changes
+}
+
+#[cfg(test)]
+mod bisync_tests {
+    use super::*;
+
+    /// BiSyncState::save must succeed even when the parent directory does not exist yet.
+    /// This is the case on the very first bisync for a fresh vault that has never synced.
+    #[test]
+    fn bisync_state_save_creates_missing_parent_dir() {
+        let dir = tempfile::TempDir::new().expect("tmpdir");
+        // Point to a path nested two levels deep that doesn't exist yet.
+        let state_path = dir.path().join("fresh-vault").join("bisync-state.json");
+        assert!(!state_path.parent().unwrap().exists(), "parent should not exist before save");
+        let state = BiSyncState::default();
+        state.save(&state_path).expect("save must succeed even with missing parent dir");
+        assert!(state_path.exists(), "state file must be written");
+    }
+
+    #[test]
+    fn bisync_state_roundtrips_json() {
+        let mut state = BiSyncState::default();
+        state.baseline.files.insert(
+            "notes/test.md".to_string(),
+            FileEntry {
+                size: 100,
+                mtime_secs: 1700000000,
+                mtime_nanos: 0,
+                hash: "abc123".to_string(),
+            },
+        );
+        state.remote.insert(
+            "notes/test.md".to_string(),
+            RemoteFileEntry {
+                size: 100,
+                mtime_secs: 1700000000,
+                etag: Some("etag-abc".to_string()),
+            },
+        );
+        let json = serde_json::to_string(&state).unwrap();
+        let restored: BiSyncState = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.baseline.files.len(), 1);
+        assert_eq!(restored.remote.len(), 1);
+    }
+
+    #[test]
+    fn classify_local_only_change() {
+        let mut baseline = SyncManifest::default();
+        baseline.files.insert("a.md".to_string(), FileEntry {
+            size: 10, mtime_secs: 100, mtime_nanos: 0, hash: "hash1".to_string()
+        });
+        let local = {
+            let mut m = baseline.clone();
+            m.files.get_mut("a.md").unwrap().mtime_secs = 200;
+            m.files.get_mut("a.md").unwrap().hash = "hash2".to_string();
+            m
+        };
+        let remote: std::collections::HashMap<String, RemoteFileEntry> = {
+            let mut m = std::collections::HashMap::new();
+            m.insert("a.md".to_string(), RemoteFileEntry {
+                size: 10, mtime_secs: 100, etag: None
+            });
+            m
+        };
+        let changes = classify_changes(&baseline, &local, &remote);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, ChangeKind::LocalOnly));
+    }
+
+    #[test]
+    fn classify_conflict() {
+        let mut baseline = SyncManifest::default();
+        baseline.files.insert("a.md".to_string(), FileEntry {
+            size: 10, mtime_secs: 100, mtime_nanos: 0, hash: "hash1".to_string()
+        });
+        let local = {
+            let mut m = baseline.clone();
+            m.files.get_mut("a.md").unwrap().mtime_secs = 200;
+            m.files.get_mut("a.md").unwrap().hash = "hash_local".to_string();
+            m
+        };
+        let remote: std::collections::HashMap<String, RemoteFileEntry> = {
+            let mut m = std::collections::HashMap::new();
+            m.insert("a.md".to_string(), RemoteFileEntry {
+                size: 15, mtime_secs: 150, etag: None
+            });
+            m
+        };
+        let changes = classify_changes(&baseline, &local, &remote);
+        assert_eq!(changes.len(), 1);
+        assert!(matches!(changes[0].kind, ChangeKind::Conflict { .. }));
     }
 }

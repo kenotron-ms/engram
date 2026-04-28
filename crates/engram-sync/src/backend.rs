@@ -16,6 +16,8 @@ pub enum SyncError {
     Encryption(String),
     #[error("Network error: {0}")]
     Network(#[from] reqwest::Error),
+    #[error("IO error: {0}")]
+    Io(String),
 }
 
 #[async_trait]

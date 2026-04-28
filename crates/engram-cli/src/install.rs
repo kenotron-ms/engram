@@ -18,51 +18,7 @@ pub enum InstallError {
     UnsupportedPlatform,
 }
 
-// ─── macOS launchd plist ───────────────────────────────────────────────────────
-
-/// launchd plist for the engram daemon service on macOS.
-pub const MACOS_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.engram.daemon</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/engram</string>
-        <string>daemon</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>/tmp/engram-daemon.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/engram-daemon.err.log</string>
-</dict>
-</plist>
-"#;
-
-// ─── Linux systemd unit ────────────────────────────────────────────────────────
-
-/// systemd user service unit for the engram daemon on Linux.
-// Always compiled so that unit tests can validate the constant on all platforms.
-#[allow(dead_code)]
-pub const LINUX_SERVICE: &str = "[Unit]\n\
-Description=engram memory daemon\n\
-After=network.target\n\
-\n\
-[Service]\n\
-ExecStart=%h/.cargo/bin/engram daemon\n\
-Restart=on-failure\n\
-RestartSec=5\n\
-\n\
-[Install]\n\
-WantedBy=default.target\n";
-
-// ─── Path helpers ──────────────────────────────────────────────────────────────
+// ─── Path helpers ─────────────────────────────────────────────────────────────
 
 /// Returns the current user's home directory via `directories::UserDirs`.
 pub fn home_dir() -> Option<PathBuf> {
@@ -81,14 +37,105 @@ pub fn systemd_user_dir() -> Option<PathBuf> {
     home_dir().map(|h| h.join(".config/systemd/user"))
 }
 
+/// Returns the `~/.engram` directory for daemon logs.
+pub fn engram_log_dir() -> PathBuf {
+    home_dir()
+        .unwrap_or_else(|| {
+            // $HOME not set — use /tmp as last resort; launchd/systemd don't expand ~
+            PathBuf::from("/tmp")
+        })
+        .join(".engram")
+}
+
+/// Returns the path of the current running executable, canonicalized.
+fn current_exe_path() -> String {
+    let raw = std::env::current_exe()
+        .unwrap_or_else(|_| PathBuf::from("engram"));
+    raw.canonicalize()
+        .unwrap_or(raw) // keep raw absolute path if canonicalize fails
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Returns the current user's UID, used to construct launchd domain strings.
+#[cfg(target_os = "macos")]
+fn current_uid() -> u32 {
+    // SAFETY: getuid(2) has no preconditions, always succeeds, and is
+    // signal-safe. Documented in POSIX as always returning a valid uid_t.
+    unsafe { libc::getuid() }
+}
+
+/// Returns the current `PATH` environment variable.
+fn current_path_env() -> String {
+    std::env::var("PATH")
+        .unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string())
+}
+
+// ─── Service content builders ─────────────────────────────────────────────────
+
+/// Builds the launchd plist for the engram daemon service on macOS.
+///
+/// Uses the current executable path and `~/.engram/` for log files.
+pub fn build_macos_plist() -> String {
+    let exe = current_exe_path();
+    let log_dir = engram_log_dir();
+    let stdout = log_dir.join("daemon.log").to_string_lossy().to_string();
+    let stderr = log_dir
+        .join("daemon.err.log")
+        .to_string_lossy()
+        .to_string();
+    let path_env = current_path_env();
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.engram.daemon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{exe}</string>
+        <string>daemon</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path_env}</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{stdout}</string>
+    <key>StandardErrorPath</key>
+    <string>{stderr}</string>
+</dict>
+</plist>"#
+    )
+}
+
+/// Builds the systemd user service unit for the engram daemon on Linux.
+///
+/// Uses the current executable path and the current `PATH` environment variable.
+// Always compiled so that unit tests can validate the content on all platforms.
+#[allow(dead_code)]
+pub fn build_linux_unit() -> String {
+    let exe = current_exe_path();
+    let path_env = current_path_env();
+    format!(
+        "[Unit]\nDescription=engram memory daemon\nAfter=network.target\n\n[Service]\nExecStart={exe} daemon\nRestart=on-failure\nRestartSec=5\nEnvironment=PATH={path_env}\n\n[Install]\nWantedBy=default.target\n"
+    )
+}
+
 // ─── Service install ───────────────────────────────────────────────────────────
 
 /// Install the engram daemon as a platform-managed background service.
 ///
 /// - **macOS**: writes `~/Library/LaunchAgents/com.engram.daemon.plist` and
-///   runs `launchctl load`.
+///   runs `launchctl bootstrap gui/<uid>`.
 /// - **Linux**: writes `~/.config/systemd/user/engram.service` and runs
-///   `systemctl --user enable engram.service`.
+///   `systemctl --user enable` then `systemctl --user start`.
 /// - **Windows**: prints a "coming soon" notice.
 pub fn install_service() -> Result<(), InstallError> {
     #[cfg(target_os = "macos")]
@@ -96,15 +143,17 @@ pub fn install_service() -> Result<(), InstallError> {
         let dir = launchagents_dir().ok_or(InstallError::UnsupportedPlatform)?;
         std::fs::create_dir_all(&dir)?;
         let plist_path = dir.join("com.engram.daemon.plist");
-        std::fs::write(&plist_path, MACOS_PLIST)?;
+        std::fs::write(&plist_path, build_macos_plist())?;
 
+        let uid = current_uid();
+        let domain = format!("gui/{uid}");
         let status = std::process::Command::new("launchctl")
-            .args(["load", plist_path.to_str().unwrap_or("")])
+            .args(["bootstrap", &domain, &plist_path.to_string_lossy()])
             .status()?;
 
         if !status.success() {
             return Err(InstallError::Command(format!(
-                "launchctl load exited with status {}",
+                "launchctl bootstrap exited with status {}",
                 status
             )));
         }
@@ -116,7 +165,7 @@ pub fn install_service() -> Result<(), InstallError> {
         let dir = systemd_user_dir().ok_or(InstallError::UnsupportedPlatform)?;
         std::fs::create_dir_all(&dir)?;
         let service_path = dir.join("engram.service");
-        std::fs::write(&service_path, LINUX_SERVICE)?;
+        std::fs::write(&service_path, build_linux_unit())?;
 
         let status = std::process::Command::new("systemctl")
             .args(["--user", "enable", "engram.service"])
@@ -125,6 +174,17 @@ pub fn install_service() -> Result<(), InstallError> {
         if !status.success() {
             return Err(InstallError::Command(format!(
                 "systemctl --user enable exited with status {}",
+                status
+            )));
+        }
+
+        let status = std::process::Command::new("systemctl")
+            .args(["--user", "start", "engram.service"])
+            .status()?;
+
+        if !status.success() {
+            return Err(InstallError::Command(format!(
+                "systemctl --user start exited with status {}",
                 status
             )));
         }
@@ -143,12 +203,13 @@ pub fn install_service() -> Result<(), InstallError> {
     Err(InstallError::UnsupportedPlatform)
 }
 
-// ─── Service uninstall ─────────────────────────────────────────────────────────
+// ─── Service uninstall ────────────────────────────────────────────────────────
 
 /// Uninstall the engram daemon background service.
 ///
-/// - **macOS**: runs `launchctl unload` and removes the plist.
-/// - **Linux**: runs `systemctl --user disable` and removes the unit file.
+/// - **macOS**: runs `launchctl bootout gui/<uid>` and removes the plist.
+/// - **Linux**: runs `systemctl --user disable` then `systemctl --user stop`
+///   and removes the unit file.
 /// - **Windows**: prints a "coming soon" notice.
 pub fn uninstall_service() -> Result<(), InstallError> {
     #[cfg(target_os = "macos")]
@@ -156,9 +217,11 @@ pub fn uninstall_service() -> Result<(), InstallError> {
         let dir = launchagents_dir().ok_or(InstallError::UnsupportedPlatform)?;
         let plist_path = dir.join("com.engram.daemon.plist");
 
-        // Best-effort unload (ignore errors if service was never loaded).
+        // Best-effort bootout (ignore errors if service was never loaded).
+        let uid = current_uid();
+        let domain = format!("gui/{uid}");
         let _ = std::process::Command::new("launchctl")
-            .args(["unload", plist_path.to_str().unwrap_or("")])
+            .args(["bootout", &domain, &plist_path.to_string_lossy()])
             .status();
 
         if plist_path.exists() {
@@ -172,9 +235,13 @@ pub fn uninstall_service() -> Result<(), InstallError> {
         let dir = systemd_user_dir().ok_or(InstallError::UnsupportedPlatform)?;
         let service_path = dir.join("engram.service");
 
-        // Best-effort disable.
+        // Best-effort disable and stop.
         let _ = std::process::Command::new("systemctl")
             .args(["--user", "disable", "engram.service"])
+            .status();
+
+        let _ = std::process::Command::new("systemctl")
+            .args(["--user", "stop", "engram.service"])
             .status();
 
         if service_path.exists() {
@@ -199,57 +266,88 @@ pub fn uninstall_service() -> Result<(), InstallError> {
 mod tests {
     use super::*;
 
-    /// The macOS plist must contain all required keys and values.
+    #[test]
+    fn plist_contains_current_exe_path() {
+        let plist = build_macos_plist();
+        let exe = std::env::current_exe()
+            .unwrap()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().unwrap())
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            plist.contains(&exe),
+            "plist should contain current exe path {exe}, got:\n{plist}"
+        );
+    }
+
+    #[test]
+    fn plist_logs_to_engram_dir_not_tmp() {
+        let plist = build_macos_plist();
+        assert!(!plist.contains("/tmp/"), "plist should not log to /tmp/");
+        assert!(plist.contains(".engram"), "plist should log to ~/.engram/");
+    }
+
+    #[test]
+    fn systemd_unit_contains_current_exe_path() {
+        let unit = build_linux_unit();
+        let exe = std::env::current_exe()
+            .unwrap()
+            .canonicalize()
+            .unwrap_or_else(|_| std::env::current_exe().unwrap())
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            unit.contains(&exe),
+            "systemd unit should contain current exe path {exe}"
+        );
+    }
+
+    /// The macOS plist must contain all required structural keys.
     #[test]
     fn test_macos_plist_contains_required_keys() {
+        let plist = build_macos_plist();
         assert!(
-            MACOS_PLIST.contains("com.engram.daemon"),
-            "MACOS_PLIST must contain the label 'com.engram.daemon'"
+            plist.contains("com.engram.daemon"),
+            "plist must contain the label 'com.engram.daemon'"
         );
         assert!(
-            MACOS_PLIST.contains("ProgramArguments"),
-            "MACOS_PLIST must contain 'ProgramArguments'"
+            plist.contains("ProgramArguments"),
+            "plist must contain 'ProgramArguments'"
         );
         assert!(
-            MACOS_PLIST.contains("/usr/local/bin/engram"),
-            "MACOS_PLIST must contain '/usr/local/bin/engram'"
+            plist.contains("<string>daemon</string>"),
+            "plist ProgramArguments must include 'daemon'"
         );
         assert!(
-            MACOS_PLIST.contains("<string>daemon</string>"),
-            "MACOS_PLIST ProgramArguments must include 'daemon'"
+            plist.contains("RunAtLoad"),
+            "plist must contain 'RunAtLoad'"
         );
         assert!(
-            MACOS_PLIST.contains("RunAtLoad"),
-            "MACOS_PLIST must contain 'RunAtLoad'"
-        );
-        assert!(
-            MACOS_PLIST.contains("KeepAlive"),
-            "MACOS_PLIST must contain 'KeepAlive'"
-        );
-        assert!(
-            MACOS_PLIST.contains("/tmp/engram-daemon"),
-            "MACOS_PLIST must reference stdout/stderr log paths under /tmp/engram-daemon*"
+            plist.contains("KeepAlive"),
+            "plist must contain 'KeepAlive'"
         );
     }
 
     /// The Linux systemd service must contain all required fields.
     #[test]
     fn test_linux_service_contains_required_fields() {
+        let unit = build_linux_unit();
         assert!(
-            LINUX_SERVICE.contains("ExecStart=%h/.cargo/bin/engram daemon"),
-            "LINUX_SERVICE must contain 'ExecStart=%h/.cargo/bin/engram daemon'"
+            unit.contains("daemon"),
+            "unit must reference 'daemon' subcommand in ExecStart"
         );
         assert!(
-            LINUX_SERVICE.contains("Restart=on-failure"),
-            "LINUX_SERVICE must contain 'Restart=on-failure'"
+            unit.contains("Restart=on-failure"),
+            "unit must contain 'Restart=on-failure'"
         );
         assert!(
-            LINUX_SERVICE.contains("RestartSec=5"),
-            "LINUX_SERVICE must contain 'RestartSec=5'"
+            unit.contains("RestartSec=5"),
+            "unit must contain 'RestartSec=5'"
         );
         assert!(
-            LINUX_SERVICE.contains("WantedBy=default.target"),
-            "LINUX_SERVICE must contain 'WantedBy=default.target'"
+            unit.contains("WantedBy=default.target"),
+            "unit must contain 'WantedBy=default.target'"
         );
     }
 }

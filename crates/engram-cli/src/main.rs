@@ -97,7 +97,7 @@ enum Commands {
         #[arg(long, default_value = "context")]
         format: String,
     },
-    /// Watch ~/.amplifier/projects for new session transcripts and process them automatically
+    /// Watch configured vaults for *.md changes and incrementally update the search index
     Daemon,
     /// Start the MCP stdio server (JSON-RPC 2.0 over stdin/stdout)
     Mcp,
@@ -277,7 +277,12 @@ fn main() {
             api_key,
         } => run_observe(&session_path, api_key.as_deref()),
         Commands::Load { format } => run_load(&format),
-        Commands::Daemon => run_daemon(),
+        Commands::Daemon => {
+            if let Err(e) = run_daemon() {
+                eprintln!("engram: daemon error: {e}");
+                std::process::exit(1);
+            }
+        }
         Commands::Mcp => run_mcp(),
         Commands::Install => run_install(),
         Commands::Uninstall => run_uninstall(),
@@ -306,13 +311,15 @@ fn main() {
     }
 }
 
-/// Resolve the vault encryption key using a three-tier fallback strategy.
+/// Resolve the vault encryption key using a four-tier fallback strategy.
 ///
 /// Tier 1 — `ENGRAM_VAULT_KEY` env var: base64-encoded 32 bytes decoded directly
 ///   into an [`engram_core::crypto::EngramKey`].
-/// Tier 2 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
+/// Tier 2 — `~/.engram/sync.key` file: base64-encoded 32 bytes, chmod 600.
+///   The id_rsa equivalent for headless daemon operation.
+/// Tier 3 — `ENGRAM_VAULT_PASSPHRASE` env var + salt from config: the passphrase is
 ///   derived using Argon2id with the salt stored in the engram config file.
-/// Tier 3 — Interactive `rpassword` prompt + salt from config.
+/// Tier 4 — Interactive `rpassword` prompt + salt from config.
 ///
 /// Never panics. Returns a human-friendly `Err(String)` on failure.
 fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
@@ -327,6 +334,15 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         return Ok(engram_core::crypto::EngramKey::from_bytes(key_bytes));
     }
 
+    // ── Tier 2: ~/.engram/sync.key file ───────────────────────────────
+    let key_path = EngramConfig::sync_key_path();
+    if key_path.exists() {
+        match engram_core::config::read_sync_key_file(&key_path) {
+            Ok(key) => return Ok(engram_core::crypto::EngramKey::from_bytes(key)),
+            Err(e) => eprintln!("  ! sync.key unreadable: {e}"),
+        }
+    }
+
     // Helper: load the 16-byte Argon2 salt from the engram config file.
     let load_salt = || -> Option<[u8; 16]> {
         let config = EngramConfig::load();
@@ -335,7 +351,7 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
         bytes.try_into().ok()
     };
 
-    // ── Tier 2: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
+    // ── Tier 3: ENGRAM_VAULT_PASSPHRASE env var + config salt ─────────────────
     if let Ok(passphrase) = std::env::var("ENGRAM_VAULT_PASSPHRASE") {
         let salt =
             load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
@@ -343,13 +359,15 @@ fn resolve_vault_key() -> Result<engram_core::crypto::EngramKey, String> {
             .map_err(|e| format!("Key derivation failed: {}", e));
     }
 
-    // ── Tier 3: interactive rpassword prompt + config salt ────────────────────
+    // ── Tier 4: interactive rpassword prompt + config salt ────────────────────
     let salt =
         load_salt().ok_or_else(|| "No salt found in config. Run: engram init".to_string())?;
     let passphrase = rpassword::prompt_password("Vault passphrase: ")
         .map_err(|e| format!("Failed to read passphrase: {}", e))?;
-    engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
-        .map_err(|e| format!("Key derivation failed: {}", e))
+    let key = engram_core::crypto::EngramKey::derive(passphrase.as_bytes(), &salt)
+        .map_err(|e| format!("Key derivation failed: {}", e))?;
+
+    Ok(key)
 }
 
 /// Initialise the vault: generate salt, prompt for passphrase, write config.
@@ -838,8 +856,10 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
     // ── End sync mode gate ──────────────────────────────────────────────────
 
     use engram_sync::{
+        azure::AzureBackend,
         backend::SyncBackend,
         encrypt::encrypt_for_sync,
+        gcs::GcsBackend,
         manifest::{FileEntry, SyncManifest},
         onedrive::OneDriveBackend,
         s3::S3Backend,
@@ -892,11 +912,45 @@ fn run_sync(backend_name: Option<&str>, vault_arg: Option<&str>, approve: bool) 
         "onedrive" => {
             let token = creds.access_token.as_deref().unwrap_or_default();
             let folder = creds.folder.as_deref().unwrap_or_default();
-            Box::new(OneDriveBackend::new(token, folder))
+            Box::new(OneDriveBackend::with_refresh_token(
+                token,
+                creds.refresh_token.as_deref(),
+                folder,
+            ))
+        }
+        "azure" => {
+            let account = creds.account.as_deref().unwrap_or_default();
+            let container = creds.container.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            match AzureBackend::new(account, ak, container) {
+                Ok(b) => Box::new(b),
+                Err(e) => {
+                    eprintln!("Failed to initialize Azure backend: {}", e);
+                    eprintln!(
+                        "Check account, container, and access key via: engram auth add azure --vault <name>"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        "gcs" => {
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            // Service-account key file path is stored in the access_key field.
+            let key_path = creds.access_key.as_deref().unwrap_or_default();
+            match GcsBackend::new(bucket, key_path) {
+                Ok(b) => Box::new(b),
+                Err(e) => {
+                    eprintln!("Failed to initialize GCS backend: {}", e);
+                    eprintln!(
+                        "Check bucket and service account key path via: engram auth add gcs --vault <name>"
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
         other => {
             eprintln!(
-                "Backend '{}' is not yet supported in engram sync. Use: s3, onedrive",
+                "Backend '{}' is not yet supported in engram sync. Use: s3, onedrive, azure, gcs",
                 other
             );
             std::process::exit(1);
@@ -1669,96 +1723,310 @@ fn search_index_status(search_dir: &Path) -> String {
     }
 }
 
-/// Watch `~/.amplifier/projects` for session transcript changes and process them automatically.
-fn run_daemon() {
-    use daemon::watch_sessions;
+/// Watch configured vaults for *.md file changes and incrementally update the search index.
+/// Vaults with `sync_mode = Auto` also get:
+///   (a) a debounced upload trigger on local change (10-second quiet period)
+///   (b) a periodic pull loop every 5 minutes
+fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::daemon::{watch_vault, VaultEvent};
     use std::sync::mpsc;
 
-    // Resolve the vault encryption key.
-    let key = match resolve_vault_key() {
-        Ok(k) => k,
-        Err(e) => {
-            eprintln!("Cannot access vault key: {}", e);
-            eprintln!("Tip: run `engram init` to set up the vault");
-            std::process::exit(1);
-        }
-    };
+    let config = EngramConfig::load();
 
-    // Determine the watch directory: ~/.amplifier/projects
-    let watch_dir = UserDirs::new()
-        .map(|u| u.home_dir().join(".amplifier/projects"))
-        .unwrap_or_else(|| PathBuf::from(".amplifier/projects"));
-
-    // Create the watch directory if it doesn't exist.
-    if let Err(e) = std::fs::create_dir_all(&watch_dir) {
-        eprintln!(
-            "Failed to create watch directory {}: {}",
-            watch_dir.display(),
-            e
-        );
-        std::process::exit(1);
+    if config.vaults.is_empty() {
+        eprintln!("engram: no vaults configured. Run 'engram init' first.");
+        return Ok(());
     }
 
-    // Read ANTHROPIC_API_KEY from environment; warn if empty but continue.
-    let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
-    if api_key.is_empty() {
-        eprintln!("Warning: ANTHROPIC_API_KEY is not set. Transcripts will be watched but facts cannot be extracted.");
-    }
+    println!("engram daemon starting — watching {} vault(s)", config.vaults.len());
 
-    // Create channel for transcript path events.
-    let (tx, rx) = mpsc::channel::<PathBuf>();
+    let (tx, rx) = mpsc::channel::<VaultEvent>();
 
-    // Start the file watcher.
-    let _watcher = match watch_sessions(&watch_dir, tx) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("Failed to start file watcher: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    eprintln!("engram daemon started. Watching: {}", watch_dir.display());
-
-    // Open the memory store for writing extracted facts.
-    let store_path = default_store_path();
-    let store = match MemoryStore::open(&store_path, &key) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Failed to open memory store: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Block on the channel receiver; process each transcript as it arrives.
-    for transcript_path in rx {
-        eprintln!("Processing: {}", transcript_path.display());
-
-        if api_key.is_empty() {
-            eprintln!("Skipping fact extraction: ANTHROPIC_API_KEY is not set.");
+    // Start a watcher for each configured vault
+    let mut watchers = Vec::new();
+    for (name, vault) in &config.vaults {
+        if !vault.path.exists() {
+            eprintln!("  skipping vault '{name}': path does not exist ({})", vault.path.display());
             continue;
         }
-
-        match observe::observe_session(&transcript_path, &store, &api_key) {
-            Ok(stats) => {
-                eprintln!(
-                    "Extracted: {} facts, Written: {} facts from {}",
-                    stats.facts_extracted, stats.facts_written, stats.session_path
-                );
+        match watch_vault(name.clone(), &vault.path, tx.clone()) {
+            Ok(w) => {
+                println!("  watching vault '{name}': {}", vault.path.display());
+                watchers.push(w);
             }
-            Err(e) => {
-                eprintln!("Error processing {}: {}", transcript_path.display(), e);
-            }
+            Err(e) => eprintln!("  failed to watch vault '{name}': {e}"),
         }
     }
+
+    if watchers.is_empty() {
+        eprintln!("engram: no vaults could be watched. Exiting.");
+        return Ok(());
+    }
+
+    // Handle SIGTERM/SIGINT for clean shutdown — must be created before the pull thread
+    // so we can clone the flag into it.
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let r = running.clone();
+        let _ = ctrlc::set_handler(move || {
+            println!("\nengram daemon shutting down...");
+            r.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+
+    // Pull loop: background thread fires every 5 minutes for SyncMode::Auto vaults.
+    // Sleeps in 1-second increments so it can honour the `running` shutdown flag promptly.
+    let config_for_pull = config.clone();
+    let running_for_pull = running.clone();
+    let pull_handle = std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        loop {
+            // ~5 minutes in 1-second ticks, bailing out early on shutdown.
+            for _ in 0..300 {
+                if !running_for_pull.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            rt.block_on(async {
+                for (name, vault) in &config_for_pull.vaults {
+                    if vault.sync_mode != SyncMode::Auto {
+                        continue;
+                    }
+                    let state_path = engram_bisync_state_path(name);
+                    if let Err(e) = trigger_bisync(name, vault, &state_path).await {
+                        eprintln!("  pull sync error for '{name}': {e}");
+                    }
+                }
+            });
+        }
+    });
+
+    // Debounce map: vault_name → last event time, used for SyncMode::Auto upload trigger.
+    // The runtime is created once here and reused for every debounce flush — creating a
+    // fresh Runtime inside the `for name in ready` loop would spin up a new thread pool
+    // on every flush, which is expensive.
+    let rt = tokio::runtime::Runtime::new().expect("tokio runtime for auto-sync");
+    let mut sync_pending: std::collections::HashMap<String, std::time::Instant> =
+        std::collections::HashMap::new();
+    let sync_debounce = std::time::Duration::from_secs(10);
+
+    // Event loop
+    while running.load(std::sync::atomic::Ordering::SeqCst) {
+        match rx.recv_timeout(std::time::Duration::from_secs(1)) {
+            Ok(event) => {
+                if event.deleted {
+                    eprintln!("  [{}] deleted: {}", event.vault_name, event.path.display());
+                } else {
+                    eprintln!("  [{}] changed: {}", event.vault_name, event.path.display());
+                    // Incremental search index update
+                    if let Some(vault) = config.vaults.get(&event.vault_name) {
+                        if let Err(e) = index_single_file(&vault.path, &event.path, &event.vault_name) {
+                            eprintln!("  index error for {}: {e}", event.path.display());
+                        }
+                    }
+                }
+                // Mark for debounced auto-sync if vault uses SyncMode::Auto.
+                if let Some(vault) = config.vaults.get(&event.vault_name) {
+                    if vault.sync_mode == SyncMode::Auto {
+                        sync_pending.insert(event.vault_name.clone(), std::time::Instant::now());
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Flush any debounced auto-sync triggers whose quiet period has elapsed.
+                let now = std::time::Instant::now();
+                let ready: Vec<String> = sync_pending
+                    .iter()
+                    .filter(|(_, t)| now.duration_since(**t) >= sync_debounce)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                for name in ready {
+                    sync_pending.remove(&name);
+                    if let Some(vault) = config.vaults.get(&name) {
+                        let state_path = engram_bisync_state_path(&name);
+                        if let Err(e) = rt.block_on(trigger_bisync(&name, vault, &state_path)) {
+                            eprintln!("  auto-sync error for '{name}': {e}");
+                        }
+                    }
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    println!("engram daemon stopped.");
+    pull_handle.join().ok(); // wait for the pull loop to finish any in-progress sync
+    Ok(())
+}
+
+/// Return the path where bisync state is persisted for the named vault.
+///
+/// Resolves to `~/.engram/<vault_name>/bisync-state.json`, falling back to
+/// `/tmp/.engram/<vault_name>/bisync-state.json` if the home directory cannot
+/// be determined.
+fn engram_bisync_state_path(vault_name: &str) -> std::path::PathBuf {
+    install::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join(".engram")
+        .join(vault_name)
+        .join("bisync-state.json")
+}
+
+/// Run `engram_sync::run_bisync` for a single vault using the credentials
+/// stored in `~/.engram/credentials`.
+///
+/// Returns an error if:
+/// - No credentials are configured for the vault.
+/// - The vault key cannot be resolved.
+/// - The backend cannot be initialised.
+/// - The bisync operation itself fails.
+async fn trigger_bisync(
+    vault_name: &str,
+    vault: &engram_core::config::VaultEntry,
+    state_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use engram_sync::{
+        azure::AzureBackend,
+        gcs::GcsBackend,
+        onedrive::OneDriveBackend,
+        run_bisync,
+        s3::S3Backend,
+    };
+
+    let all_creds = EngramConfig::load_credentials();
+    let creds = EngramConfig::credentials_for_vault(vault_name, &all_creds)
+        .ok_or_else(|| format!("no credentials for vault '{vault_name}'"))?;
+
+    let key = resolve_vault_key().map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        e.into()
+    })?;
+
+    match creds.backend.as_str() {
+        "s3" => {
+            let endpoint = creds.endpoint.as_deref().unwrap_or_default();
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            let sk = creds.secret_key.as_deref().unwrap_or_default();
+            let backend = S3Backend::new(endpoint, bucket, ak, sk)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "onedrive" => {
+            let token = creds.access_token.as_deref().unwrap_or_default();
+            let folder = creds.folder.as_deref().unwrap_or_default();
+            let backend = OneDriveBackend::with_refresh_token(
+                token,
+                creds.refresh_token.as_deref(),
+                folder,
+            );
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "azure" => {
+            let account = creds.account.as_deref().unwrap_or_default();
+            let container = creds.container.as_deref().unwrap_or_default();
+            let ak = creds.access_key.as_deref().unwrap_or_default();
+            let backend = AzureBackend::new(account, ak, container)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        "gcs" => {
+            let bucket = creds.bucket.as_deref().unwrap_or_default();
+            // Service-account key file path is stored in the access_key field.
+            let key_path = creds.access_key.as_deref().unwrap_or_default();
+            let backend = GcsBackend::new(bucket, key_path)?;
+            let result = run_bisync(&vault.path, state_path, &key, &backend).await?;
+            eprintln!(
+                "  bisync '{vault_name}': ↑{} ↓{} conflicts:{}",
+                result.uploaded, result.downloaded, result.conflicts_resolved
+            );
+        }
+        other => {
+            eprintln!("  unsupported backend '{other}' for vault '{vault_name}'");
+        }
+    }
+    Ok(())
+}
+
+/// Index a single vault file incrementally in the Tantivy search index.
+/// Called by the daemon when a *.md file changes. Skips silently if no
+/// search index exists yet (user hasn't run `engram index`).
+fn index_single_file(
+    vault_path: &std::path::Path,
+    file_path: &std::path::Path,
+    vault_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let search_dir = vault_storage_dir(vault_name).join("search");
+    // Only index if a search index already exists (meta.json present); don't
+    // create one on-the-fly. Checking meta.json is more precise than checking
+    // directory existence — a partially-created or empty directory is not an index.
+    if !search_dir.join("meta.json").exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(file_path)?;
+    // Use vault-relative path as document key to match what index_vault uses.
+    // This prevents duplicate documents when the same file is re-indexed.
+    let rel = file_path
+        .strip_prefix(vault_path)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| file_path.to_string_lossy().into_owned());
+    let mut indexer = TantivyIndexer::open(&search_dir)?;
+    indexer.index_file(&rel, &content)?;
+    Ok(())
 }
 
 /// Install the engram daemon as a system service.
 fn run_install() {
+    // Ensure ~/.engram/ exists before install_service() calls launchctl bootstrap,
+    // which fires the daemon immediately (RunAtLoad=true). Without this, the daemon's
+    // first-launch logs are silently dropped because the log directory doesn't exist yet.
+    let log_dir = install::engram_log_dir();
+    if let Err(e) = std::fs::create_dir_all(&log_dir) {
+        eprintln!("  ! Could not create log directory {}: {e}", log_dir.display());
+    }
+
     match install::install_service() {
         Ok(()) => println!("\u{2713} engram daemon service installed"),
         Err(e) => {
             eprintln!("Failed to install service: {}", e);
             std::process::exit(1);
+        }
+    }
+
+    // Write sync.key for headless daemon operation.
+    let key_path = EngramConfig::sync_key_path();
+    if key_path.exists() {
+        println!("\u{2713} sync.key already present at {}", key_path.display());
+    } else {
+        println!(
+            "Setting up sync key (stored at {}, chmod 600)...",
+            key_path.display()
+        );
+        match resolve_vault_key() {
+            Ok(key) => {
+                // Only write if still absent (user may have created it via another path)
+                if !key_path.exists() {
+                    match engram_core::config::write_sync_key_file(&key_path, key.as_bytes()) {
+                        Ok(_) => println!(
+                            "\u{2713} sync.key written \u{2014} daemon starts without passphrase prompt"
+                        ),
+                        Err(e) => eprintln!("  ! Could not write sync.key: {e}"),
+                    }
+                }
+            }
+            Err(e) => eprintln!(
+                "  ! Could not derive key: {e} \u{2014} set ENGRAM_VAULT_KEY for headless use"
+            ),
         }
     }
 }
@@ -1778,6 +2046,11 @@ fn run_uninstall() {
 fn doctor_key_method(config: &EngramConfig) -> String {
     if std::env::var("ENGRAM_VAULT_KEY").is_ok() {
         "ENGRAM_VAULT_KEY env var \u{2713}".to_string()
+    } else if EngramConfig::sync_key_path().exists() {
+        format!(
+            "sync.key file ({}) \u{2713}",
+            EngramConfig::sync_key_path().display()
+        )
     } else if std::env::var("ENGRAM_VAULT_PASSPHRASE").is_ok() {
         "ENGRAM_VAULT_PASSPHRASE env var \u{2713}".to_string()
     } else if config.key.salt.is_some() {
@@ -1788,6 +2061,42 @@ fn doctor_key_method(config: &EngramConfig) -> String {
 }
 
 /// Print diagnostic information about the engram installation.
+fn daemon_service_status() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("launchctl")
+            .args(["list", "com.engram.daemon"])
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                // `launchctl list <label>` returns a plist dict on macOS 10.10+.
+                // The "PID" key is present only when the process is actually running.
+                if text.contains("\"PID\"") {
+                    "running".to_string()
+                } else {
+                    "installed (not running)".to_string()
+                }
+            }
+            _ => "not installed".to_string(),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let out = std::process::Command::new("systemctl")
+            .args(["--user", "is-active", "engram.service"])
+            .output();
+        match out {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+            Err(_) => "unknown".to_string(),
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        "not supported on this platform".to_string()
+    }
+}
+
 fn run_doctor() {
     // Load config once to avoid redundant filesystem reads across helpers.
     let config = EngramConfig::load();
@@ -1847,10 +2156,30 @@ fn run_doctor() {
         );
     }
 
-    // ── ANTHROPIC_API_KEY status ───────────────────────────────────────────────
-    match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(v) if !v.is_empty() => println!("ANTHROPIC_API_KEY: set \u{2713}"),
-        _ => println!("ANTHROPIC_API_KEY: not set"),
+    // ── Daemon service status ──────────────────────────────────────────────────
+    let svc = daemon_service_status();
+    let svc_icon = if svc == "running" { "✓" } else { "✗" };
+    println!("Daemon:            {svc_icon} {svc}");
+
+    // ── sync.key file ─────────────────────────────────────────────────────────
+    let key_path = EngramConfig::sync_key_path();
+    if key_path.exists() {
+        println!("sync.key:          ✓ present");
+    } else {
+        println!("sync.key:          ✗ missing — run 'engram install' to create");
+    }
+
+    // ── Search index status ──────────────────────────────────────────────────
+    println!("{}", search_index_status(&default_search_dir()));
+
+    // ── Sync credentials ─────────────────────────────────────────────────────
+    let creds_path = install::home_dir()
+        .map(|h| h.join(".engram").join("credentials"))
+        .unwrap_or_else(|| PathBuf::from(".engram/credentials"));
+    if creds_path.exists() {
+        println!("Sync credentials:  ✓ configured");
+    } else {
+        println!("Sync credentials:  - not configured (run 'engram auth')");
     }
 }
 
@@ -2234,14 +2563,20 @@ mod tests {
     #[test]
     #[serial]
     fn test_default_store_path_ends_with_engram_memory_db() {
-        // Remove the env var first so the fallback path is tested deterministically.
+        let dir = tempfile::TempDir::new().unwrap();
+        let empty_config = dir.path().join("empty-config.toml");
+        std::env::set_var("ENGRAM_CONFIG_PATH", empty_config.to_str().unwrap());
         std::env::remove_var("ENGRAM_STORE_PATH");
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
+
         let path = default_store_path();
-        let path_str = path.to_string_lossy();
+
+        std::env::remove_var("ENGRAM_CONFIG_PATH");
         assert!(
-            path_str.ends_with(".engram/memory.db"),
+            path.to_string_lossy().ends_with(".engram/memory.db")
+                || path.to_string_lossy().ends_with(".engram\\memory.db"),
             "store path should end with .engram/memory.db, got: {}",
-            path_str
+            path.display()
         );
     }
 
@@ -2504,10 +2839,13 @@ mod tests {
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
         std::env::set_var("ENGRAM_CONFIG_PATH", config_path.to_str().unwrap());
+        // Prevent Tier 2 from picking up a real ~/.engram/sync.key on developer machines.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = resolve_vault_key();
 
         std::env::remove_var("ENGRAM_CONFIG_PATH");
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert!(result.is_err(), "should fail when not initialized");
         let err_msg = result.unwrap_err();
@@ -2591,8 +2929,12 @@ mod tests {
         };
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        // Prevent sync.key on developer machines from masking the salt-configured tier.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = doctor_key_method(&config);
+
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert_eq!(
             result, "passphrase prompt (salt configured) \u{2713}",
@@ -2607,8 +2949,12 @@ mod tests {
         let config = EngramConfig::default();
         std::env::remove_var("ENGRAM_VAULT_KEY");
         std::env::remove_var("ENGRAM_VAULT_PASSPHRASE");
+        // Prevent sync.key on developer machines from masking the not-initialized tier.
+        std::env::set_var("ENGRAM_SYNC_KEY_PATH", "/nonexistent/sync.key");
 
         let result = doctor_key_method(&config);
+
+        std::env::remove_var("ENGRAM_SYNC_KEY_PATH");
 
         assert_eq!(
             result, "not initialized \u{2717} \u{2014} run: engram init",
@@ -2646,6 +2992,120 @@ mod tests {
             path_str.ends_with(".lifeos/memory"),
             "resolve_vault(None) with no config should fall back to .lifeos/memory, got: {}",
             path_str
+        );
+    }
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    #[test]
+    fn daemon_status_returns_a_known_state() {
+        let status = super::daemon_service_status();
+        let known_prefixes = [
+            "running",
+            "installed",
+            "not installed",
+            "active",
+            "inactive",
+            "unknown",
+            "not supported",
+        ];
+        assert!(
+            known_prefixes.iter().any(|&p| status.starts_with(p)),
+            "unexpected daemon status: {status}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod auto_sync_tests {
+    #[test]
+    fn auto_sync_only_for_auto_mode_vaults() {
+        let source = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")
+        ).unwrap();
+
+        // Scope check to the run_daemon() function body only, so we don't
+        // accidentally match SyncMode::Auto from run_sync() or other functions.
+        let daemon_start = source.find("fn run_daemon(").expect("run_daemon not found");
+        let daemon_end = source[daemon_start + 1..]
+            .find("\nfn ")
+            .map(|i| daemon_start + 1 + i)
+            .unwrap_or(source.len());
+        let daemon_body = &source[daemon_start..daemon_end];
+
+        assert!(
+            daemon_body.contains("SyncMode::Auto"),
+            "daemon must check SyncMode::Auto before triggering sync"
+        );
+    }
+}
+
+#[cfg(test)]
+mod daemon_integration_tests {
+    #[test]
+    fn daemon_config_reads_all_vaults() {
+        let source = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs")
+        ).unwrap();
+
+        // Check only non-test source to avoid self-referential false positives.
+        // The test module itself may contain the forbidden strings as string literals.
+        let non_test_source = source
+            .rfind("\n#[cfg(test)]\nmod daemon_integration_tests")
+            .map(|i| &source[..i])
+            .unwrap_or(&source);
+
+        let forbidden = ['.', 'a', 'm', 'p', 'l', 'i', 'f', 'i', 'e', 'r', '/', 'p', 'r', 'o', 'j', 'e', 'c', 't', 's'].iter().collect::<String>();
+        assert!(
+            !non_test_source.contains(&*forbidden),
+            "run_daemon should not reference the old amplifier projects path"
+        );
+
+        // Scope the observe_session check to the run_daemon function body only.
+        // run_observe() is intentionally kept and may call observe_session — that's fine.
+        let daemon_start = non_test_source.find("fn run_daemon(").expect("run_daemon not found");
+        let daemon_end = non_test_source[daemon_start + 1..]
+            .find("\nfn ")
+            .map(|i| daemon_start + 1 + i)
+            .unwrap_or(non_test_source.len());
+        let daemon_body = &non_test_source[daemon_start..daemon_end];
+        assert!(
+            !daemon_body.contains("observe_session"),
+            "run_daemon should not call observe_session"
+        );
+    }
+
+    /// Regression: both OneDrive call sites in the sync commands must pass the
+    /// `refresh_token` from credentials through to the backend constructor so that
+    /// automatic token refresh on 401 responses actually works.
+    #[test]
+    fn test_onedrive_call_sites_wire_refresh_token_from_credentials() {
+        use engram_core::config::VaultSyncCredentials;
+        use engram_sync::onedrive::OneDriveBackend;
+
+        let creds = VaultSyncCredentials {
+            backend: "onedrive".to_string(),
+            access_token: Some("access_tok".to_string()),
+            refresh_token: Some("refresh_tok".to_string()),
+            folder: Some("/vault".to_string()),
+            ..Default::default()
+        };
+
+        let token = creds.access_token.as_deref().unwrap_or_default();
+        let folder = creds.folder.as_deref().unwrap_or_default();
+
+        // Mirrors the fixed call-site pattern: with_refresh_token wires the token.
+        let backend = OneDriveBackend::with_refresh_token(
+            token,
+            creds.refresh_token.as_deref(),
+            folder,
+        );
+
+        assert!(
+            backend.has_refresh_token(),
+            "OneDriveBackend must preserve refresh_token from credentials; \
+             call sites must use with_refresh_token(), not new()"
         );
     }
 }

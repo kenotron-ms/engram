@@ -2,6 +2,7 @@
     name = "engram"
     version = "0.1.0"
     edition = "2021"
+    repository = "https://github.com/kenotron-ms/engram"
 
     [lib]
     name = "engram"
@@ -26,9 +27,11 @@
     serde_json = "1"
     serde = { version = "1", features = ["derive"] }
     notify = "6"
+    ctrlc = { version = "3", features = ["termination"] }
     shellexpand = "3"
     base64 = { version = "0.22", features = ["std"] }
 bytes = "1"
+libc = "0.2"
 
     [dev-dependencies]
     assert_cmd = "2"
