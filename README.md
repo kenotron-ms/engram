@@ -9,14 +9,26 @@ Engram stores your life's knowledge as markdown files, extracts atomic facts int
 ## Install
 
 ```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/kenotron-ms/engram/releases/latest/download/engram-installer.sh | sh
+```
+
+No Rust required. Downloads the right pre-built binary for your OS and adds it to your PATH.
+
+**Supported platforms:** macOS (Apple Silicon + Intel), Linux (x86_64)
+
+<details>
+<summary>Build from source</summary>
+
+```bash
 cargo install --path crates/engram-cli
 ```
 
-Or build from source:
+Or:
 ```bash
 cargo build --release
 # binary at target/release/engram
 ```
+</details>
 
 ## Quick Start
 

@@ -2,6 +2,7 @@
     name = "engram"
     version = "0.1.0"
     edition = "2021"
+    repository = "https://github.com/kenotron-ms/engram"
 
     [lib]
     name = "engram"
